@@ -2,7 +2,7 @@ import * as clc from "cli-color";
 import * as ora from "ora";
 
 import { Command } from "../command";
-import * as getProjectId from "../getProjectId";
+import { needProjectId } from "../projectUtils";
 import { FirebaseError } from "../error";
 import {
   AndroidAppMetadata,
@@ -103,7 +103,7 @@ async function initiateIosAppCreation(options: CreateIosAppOptions): Promise<Ios
     });
     spinner.succeed();
     return appData;
-  } catch (err) {
+  } catch (err: any) {
     spinner.fail();
     throw err;
   }
@@ -135,7 +135,7 @@ async function initiateAndroidAppCreation(
     });
     spinner.succeed();
     return appData;
-  } catch (err) {
+  } catch (err: any) {
     spinner.fail();
     throw err;
   }
@@ -153,7 +153,7 @@ async function initiateWebAppCreation(options: CreateWebAppOptions): Promise<Web
     const appData = await createWebApp(options.project, { displayName: options.displayName });
     spinner.succeed();
     return appData;
-  } catch (err) {
+  } catch (err: any) {
     spinner.fail();
     throw err;
   }
@@ -173,7 +173,7 @@ module.exports = new Command("apps:create [platform] [displayName]")
       displayName: string | undefined,
       options: any
     ): Promise<AppMetadata> => {
-      const projectId = getProjectId(options);
+      const projectId = needProjectId(options);
 
       if (!options.nonInteractive && !platform) {
         platform = await promptOnce({

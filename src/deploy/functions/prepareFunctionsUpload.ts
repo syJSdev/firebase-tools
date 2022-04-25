@@ -8,42 +8,35 @@ import * as tmp from "tmp";
 
 import { FirebaseError } from "../../error";
 import { logger } from "../../logger";
-import { discoverBackendSpec } from "./discovery";
-import { isEmptyBackend } from "./backend";
+import * as backend from "./backend";
 import * as functionsConfig from "../../functionsConfig";
 import * as utils from "../../utils";
 import * as fsAsync from "../../fsAsync";
-import * as args from "./args";
-import { Options } from "../../options";
+import * as projectConfig from "../../functions/projectConfig";
 
 const CONFIG_DEST_FILE = ".runtimeconfig.json";
 
-async function getFunctionsConfig(context: args.Context): Promise<{ [key: string]: any }> {
-  let config: Record<string, any> = {};
-  if (context.runtimeConfigEnabled) {
-    try {
-      config = await functionsConfig.materializeAll(context.firebaseConfig!.projectId);
-    } catch (err) {
-      logger.debug(err);
-      let errorCode = err?.context?.response?.statusCode;
-      if (!errorCode) {
-        logger.debug("Got unexpected error from Runtime Config; it has no status code:", err);
-        errorCode = 500;
-      }
-      if (errorCode === 500 || errorCode === 503) {
-        throw new FirebaseError(
-          "Cloud Runtime Config is currently experiencing issues, " +
-            "which is preventing your functions from being deployed. " +
-            "Please wait a few minutes and then try to deploy your functions again." +
-            "\nRun `firebase deploy --except functions` if you want to continue deploying the rest of your project."
-        );
-      }
-      config = {};
+// TODO(inlined): move to a file that's not about uploading source code
+export async function getFunctionsConfig(projectId: string): Promise<Record<string, unknown>> {
+  try {
+    return await functionsConfig.materializeAll(projectId);
+  } catch (err: any) {
+    logger.debug(err);
+    let errorCode = err?.context?.response?.statusCode;
+    if (!errorCode) {
+      logger.debug("Got unexpected error from Runtime Config; it has no status code:", err);
+      errorCode = 500;
+    }
+    if (errorCode === 500 || errorCode === 503) {
+      throw new FirebaseError(
+        "Cloud Runtime Config is currently experiencing issues, " +
+          "which is preventing your functions from being deployed. " +
+          "Please wait a few minutes and then try to deploy your functions again." +
+          "\nRun `firebase deploy --except functions` if you want to continue deploying the rest of your project."
+      );
     }
   }
-
-  config.firebase = context.firebaseConfig;
-  return config;
+  return {};
 }
 
 async function pipeAsync(from: archiver.Archiver, to: fs.WriteStream) {
@@ -54,7 +47,11 @@ async function pipeAsync(from: archiver.Archiver, to: fs.WriteStream) {
   });
 }
 
-async function packageSource(options: Options, sourceDir: string, configValues: any) {
+async function packageSource(
+  sourceDir: string,
+  config: projectConfig.ValidatedSingle,
+  runtimeConfig: any
+) {
   const tmpFile = tmp.fileSync({ prefix: "firebase-functions-", postfix: ".zip" }).name;
   const fileStream = fs.createWriteStream(tmpFile, {
     flags: "w",
@@ -66,7 +63,7 @@ async function packageSource(options: Options, sourceDir: string, configValues: 
   // you're in the public dir when you deploy.
   // We ignore any CONFIG_DEST_FILE that already exists, and write another one
   // with current config values into the archive in the "end" handler for reader
-  const ignore = options.config.get("functions.ignore", ["node_modules", ".git"]) as string[];
+  const ignore = config.ignore || ["node_modules", ".git"];
   ignore.push(
     "firebase-debug.log",
     "firebase-debug.*.log",
@@ -80,13 +77,15 @@ async function packageSource(options: Options, sourceDir: string, configValues: 
         mode: file.mode,
       });
     });
-    archive.append(JSON.stringify(configValues, null, 2), {
-      name: CONFIG_DEST_FILE,
-      mode: 420 /* 0o644 */,
-    });
+    if (typeof runtimeConfig !== "undefined") {
+      archive.append(JSON.stringify(runtimeConfig, null, 2), {
+        name: CONFIG_DEST_FILE,
+        mode: 420 /* 0o644 */,
+      });
+    }
     archive.finalize();
     await pipeAsync(archive, fileStream);
-  } catch (err) {
+  } catch (err: any) {
     throw new FirebaseError(
       "Could not read source directory. Remove links and shortcuts and try again.",
       {
@@ -95,10 +94,11 @@ async function packageSource(options: Options, sourceDir: string, configValues: 
       }
     );
   }
+
   utils.logBullet(
     clc.cyan.bold("functions:") +
       " packaged " +
-      clc.bold(options.config.get("functions.source")) +
+      clc.bold(sourceDir) +
       " (" +
       filesize(archive.pointer()) +
       ") for uploading"
@@ -107,16 +107,9 @@ async function packageSource(options: Options, sourceDir: string, configValues: 
 }
 
 export async function prepareFunctionsUpload(
-  context: args.Context,
-  options: Options
+  sourceDir: string,
+  config: projectConfig.ValidatedSingle,
+  runtimeConfig?: backend.RuntimeConfigValues
 ): Promise<string | undefined> {
-  const sourceDir = options.config.path(options.config.get("functions.source") as string);
-  const configValues = await getFunctionsConfig(context);
-  const backend = await discoverBackendSpec(context, options, configValues);
-  options.config.set("functions.backend", backend);
-  if (isEmptyBackend(backend)) {
-    // No need to package if there are 0 functions to deploy.
-    return;
-  }
-  return packageSource(options, sourceDir, configValues);
+  return packageSource(sourceDir, config, runtimeConfig);
 }

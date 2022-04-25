@@ -8,6 +8,7 @@ export interface OperationPollerOptions {
   apiVersion: string;
   operationResourceName: string;
   backoff?: number;
+  maxBackoff?: number;
   masterTimeout?: number;
   onPoll?: (operation: OperationResult<any>) => any;
 }
@@ -39,6 +40,7 @@ export class OperationPoller<T> {
       name: options.pollerName || "LRO Poller",
       concurrency: 1,
       retries: Number.MAX_SAFE_INTEGER,
+      maxBackoff: options.maxBackoff,
       backoff: options.backoff || DEFAULT_INITIAL_BACKOFF_DELAY_MILLIS,
     });
 
@@ -65,7 +67,7 @@ export class OperationPoller<T> {
       let res;
       try {
         res = await apiClient.get<OperationResult<T>>(options.operationResourceName);
-      } catch (err) {
+      } catch (err: any) {
         // Responses with 500 or 503 status code are treated as retriable errors.
         if (err.status === 500 || err.status === 503) {
           throw err;

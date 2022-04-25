@@ -1,16 +1,14 @@
-import { URL } from "url";
 import * as crypto from "crypto";
 import * as fs from "fs-extra";
 import * as path from "path";
-import * as ProgressBar from "progress";
 import * as tmp from "tmp";
 import * as unzipper from "unzipper";
 
-import { Client } from "../apiv2";
 import { EmulatorLogger } from "./emulatorLogger";
 import { EmulatorDownloadDetails, DownloadableEmulators } from "./types";
 import { FirebaseError } from "../error";
 import * as downloadableEmulators from "./downloadableEmulators";
+import * as downloadUtils from "../downloadUtils";
 
 tmp.setGracefulCleanup();
 
@@ -23,7 +21,7 @@ export async function downloadEmulator(name: DownloadableEmulators): Promise<voi
   );
   fs.ensureDirSync(emulator.opts.cacheDir);
 
-  const tmpfile = await downloadToTmp(emulator.opts.remoteUrl);
+  const tmpfile = await downloadUtils.downloadToTmp(emulator.opts.remoteUrl);
 
   if (!emulator.opts.skipChecksumAndSize) {
     await validateSize(tmpfile, emulator.opts.expectedSize);
@@ -43,6 +41,37 @@ export async function downloadEmulator(name: DownloadableEmulators): Promise<voi
   fs.chmodSync(executablePath, 0o755);
 
   removeOldFiles(name, emulator);
+}
+
+export async function downloadExtensionVersion(
+  extensionVersionRef: string,
+  sourceDownloadUri: string,
+  targetDir: string
+): Promise<void> {
+  const emulatorLogger = EmulatorLogger.forExtension({ ref: extensionVersionRef });
+  emulatorLogger.logLabeled(
+    "BULLET",
+    "extensions",
+    `Starting download for ${extensionVersionRef} source code...`
+  );
+  try {
+    fs.mkdirSync(targetDir);
+  } catch (err) {
+    emulatorLogger.logLabeled(
+      "BULLET",
+      "extensions",
+      `cache directory for ${extensionVersionRef} already exists...`
+    );
+  }
+  emulatorLogger.logLabeled("BULLET", "extensions", `downloading ${sourceDownloadUri}...`);
+  const sourceCodeZip = await downloadUtils.downloadToTmp(sourceDownloadUri);
+  await unzip(sourceCodeZip, targetDir);
+  fs.chmodSync(targetDir, 0o755);
+
+  emulatorLogger.logLabeled("BULLET", "extensions", `Downloaded to ${targetDir}...`);
+  // TODO: We should not need to do this wait
+  // However, when I remove this, unzipDir doesn't contain everything yet.
+  await new Promise((resolve) => setTimeout(resolve, 1000));
 }
 
 function unzip(zipPath: string, unzipDir: string): Promise<void> {
@@ -84,44 +113,6 @@ function removeOldFiles(
       fs.removeSync(fullFilePath);
     }
   }
-}
-
-/**
- * Downloads the resource at `remoteUrl` to a temporary file.
- * Resolves to the temporary file's name, rejects if there's any error.
- * @param remoteUrl URL to download.
- */
-async function downloadToTmp(remoteUrl: string): Promise<string> {
-  const u = new URL(remoteUrl);
-  const c = new Client({ urlPrefix: u.origin, auth: false });
-  const tmpfile = tmp.fileSync();
-  const writeStream = fs.createWriteStream(tmpfile.name);
-
-  const res = await c.request<void, NodeJS.ReadableStream>({
-    method: "GET",
-    path: u.pathname,
-    queryParams: u.searchParams,
-    responseType: "stream",
-    resolveOnHTTPError: true,
-  });
-  if (res.status !== 200) {
-    throw new FirebaseError(`download failed, status ${res.status}`, { exit: 1 });
-  }
-
-  const total = parseInt(res.response.headers.get("content-length") || "0", 10);
-  const totalMb = Math.ceil(total / 1000000);
-  const bar = new ProgressBar(`Progress: :bar (:percent of ${totalMb}MB)`, { total, head: ">" });
-
-  res.body.on("data", (chunk) => {
-    bar.tick(chunk.length);
-  });
-
-  await new Promise((resolve) => {
-    writeStream.on("finish", resolve);
-    res.body.pipe(writeStream);
-  });
-
-  return tmpfile.name;
 }
 
 /**

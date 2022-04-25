@@ -1,14 +1,17 @@
 import * as _ from "lodash";
 import * as clc from "cli-color";
 
-import * as api from "./api";
+import { firebaseApiOrigin } from "./api";
+import { Client } from "./apiv2";
 import { ensure as ensureApiEnabled } from "./ensureApiEnabled";
 import { FirebaseError } from "./error";
-import * as getProjectId from "./getProjectId";
+import { needProjectId } from "./projectUtils";
 import * as runtimeconfig from "./gcp/runtimeconfig";
 import * as args from "./deploy/functions/args";
 
 export const RESERVED_NAMESPACES = ["firebase"];
+
+const apiClient = new Client({ urlPrefix: firebaseApiOrigin });
 
 interface Id {
   config: string;
@@ -43,7 +46,7 @@ function isReservedNamespace(id: Id) {
 }
 
 export async function ensureApi(options: any): Promise<void> {
-  const projectId = getProjectId(options);
+  const projectId = needProjectId(options);
   return ensureApiEnabled(projectId, "runtimeconfig.googleapis.com", "runtimeconfig", true);
 }
 
@@ -58,6 +61,7 @@ export function idsToVarName(projectId: string, configId: string, varId: string)
   return _.join(["projects", projectId, "configs", configId, "variables", varId], "/");
 }
 
+// TODO(inlined): Yank and inline into Fabricator
 export function getAppEngineLocation(config: any): string {
   let appEngineLocation = config.locationId;
   if (appEngineLocation && appEngineLocation.match(/[^\d]$/)) {
@@ -68,11 +72,10 @@ export function getAppEngineLocation(config: any): string {
 }
 
 export async function getFirebaseConfig(options: any): Promise<args.FirebaseConfig> {
-  const projectId = getProjectId(options, false);
-  const response = await api.request("GET", "/v1beta1/projects/" + projectId + "/adminSdkConfig", {
-    auth: true,
-    origin: api.firebaseApiOrigin,
-  });
+  const projectId = needProjectId(options);
+  const response = await apiClient.get<args.FirebaseConfig>(
+    `/v1beta1/projects/${projectId}/adminSdkConfig`
+  );
   return response.body;
 }
 
@@ -89,7 +92,7 @@ export async function setVariablesRecursive(
     try {
       // Only attempt to parse 'val' if it is a String (takes care of unparsed JSON, numbers, quoted string, etc.)
       parsed = JSON.parse(val);
-    } catch (e) {
+    } catch (e: any) {
       // 'val' is just a String
     }
   }

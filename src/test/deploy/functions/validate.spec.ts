@@ -2,15 +2,12 @@ import { expect } from "chai";
 import * as sinon from "sinon";
 
 import { FirebaseError } from "../../../error";
-import { RUNTIME_NOT_SET } from "../../../deploy/functions/parseRuntimeAndValidateSDK";
-import { FunctionSpec } from "../../../deploy/functions/backend";
 import * as fsutils from "../../../fsutils";
 import * as validate from "../../../deploy/functions/validate";
 import * as projectPath from "../../../projectPath";
-
-// have to require this because no @types/cjson available
-// eslint-disable-next-line
-const cjson = require("cjson");
+import * as secretManager from "../../../gcp/secretManager";
+import * as backend from "../../../deploy/functions/backend";
+import { BEFORE_CREATE_EVENT, BEFORE_SIGN_IN_EVENT } from "../../../functions/events/v1";
 
 describe("validate", () => {
   describe("functionsDirectoryExists", () => {
@@ -32,7 +29,7 @@ describe("validate", () => {
       dirExistsStub.returns(true);
 
       expect(() => {
-        validate.functionsDirectoryExists({ cwd: "cwd" }, "sourceDirName");
+        validate.functionsDirectoryExists("/cwd/sourceDirName", "/cwd");
       }).to.not.throw();
     });
 
@@ -41,7 +38,7 @@ describe("validate", () => {
       dirExistsStub.returns(false);
 
       expect(() => {
-        validate.functionsDirectoryExists({ cwd: "cwd" }, "sourceDirName");
+        validate.functionsDirectoryExists("/cwd/sourceDirName", "/cwd");
       }).to.throw(FirebaseError);
     });
   });
@@ -65,9 +62,11 @@ describe("validate", () => {
       const functions = [
         {
           id: "my-function-!@#$%",
+          platform: "gcfv1",
         },
         {
           id: "my-function-!@#$!@#",
+          platform: "gcfv1",
         },
       ];
 
@@ -77,7 +76,16 @@ describe("validate", () => {
     });
 
     it("should throw error if some function names are improperly formatted", () => {
-      const functions = [{ id: "my-function$%#" }, { id: "my-function-2" }];
+      const functions = [
+        {
+          id: "my-function$%#",
+          platform: "gcfv1",
+        },
+        {
+          id: "my-function-2",
+          platform: "gcfv2",
+        },
+      ];
 
       expect(() => {
         validate.functionIdsAreValid(functions);
@@ -87,184 +95,385 @@ describe("validate", () => {
     // I think it should throw error here but it doesn't error on empty or even undefined functionNames.
     // TODO(b/131331234): fix this test when validation code path is fixed.
     it.skip("should throw error on empty function names", () => {
-      const functions = [{ id: "" }];
+      const functions = [{ id: "", platform: "gcfv1" }];
 
+      expect(() => {
+        validate.functionIdsAreValid(functions);
+      }).to.throw(FirebaseError);
+    });
+
+    it("should throw error on capital letters in v2 function names", () => {
+      const functions = [{ id: "Hi", platform: "gcfv2" }];
+      expect(() => {
+        validate.functionIdsAreValid(functions);
+      }).to.throw(FirebaseError);
+    });
+
+    it("should throw error on underscores in v2 function names", () => {
+      const functions = [{ id: "o_O", platform: "gcfv2" }];
       expect(() => {
         validate.functionIdsAreValid(functions);
       }).to.throw(FirebaseError);
     });
   });
 
-  describe("checkForInvalidChangeOfTrigger", () => {
-    const CLOUD_FUNCTION: Omit<FunctionSpec, "trigger"> = {
-      apiVersion: 1,
-      id: "my-func",
-      region: "us-central1",
+  describe("endpointsAreValid", () => {
+    const ENDPOINT_BASE: backend.Endpoint = {
+      platform: "gcfv2",
+      id: "id",
+      region: "us-east1",
       project: "project",
-      runtime: "nodejs14",
-      entryPoint: "function",
+      entryPoint: "func",
+      runtime: "nodejs16",
+      httpsTrigger: {},
     };
-    it("should throw if a https function would be changed into an event triggered function", () => {
-      const fn: FunctionSpec = {
-        ...CLOUD_FUNCTION,
-        trigger: {
-          eventType: "google.pubsub.topic.publish",
-          eventFilters: {},
-          retry: false,
-        },
-      };
-      const exFn: FunctionSpec = {
-        ...CLOUD_FUNCTION,
-        trigger: {
-          allowInsecure: true,
-        },
-      };
 
-      expect(() => {
-        validate.checkForInvalidChangeOfTrigger(fn, exFn);
-      }).to.throw();
+    it("disallows concurrency for GCF gen 1", () => {
+      const ep: backend.Endpoint = {
+        ...ENDPOINT_BASE,
+        platform: "gcfv1",
+        availableMemoryMb: backend.MIN_MEMORY_FOR_CONCURRENCY,
+        concurrency: 2,
+      };
+      expect(() => validate.endpointsAreValid(backend.of(ep))).to.throw(/GCF gen 1/);
     });
 
-    it("should throw if a event triggered function would be changed into an https function", () => {
-      const fn: FunctionSpec = {
-        ...CLOUD_FUNCTION,
-        trigger: {
-          allowInsecure: true,
-        },
-      };
-      const exFn: FunctionSpec = {
-        ...CLOUD_FUNCTION,
-        trigger: {
-          eventType: "google.pubsub.topic.publish",
-          eventFilters: {},
-          retry: false,
-        },
-      };
-
-      expect(() => {
-        validate.checkForInvalidChangeOfTrigger(fn, exFn);
-      }).to.throw();
+    it("Allows endpoints with no mem and no concurrency", () => {
+      expect(() => validate.endpointsAreValid(backend.of(ENDPOINT_BASE))).to.not.throw;
     });
 
-    it("should not throw if a event triggered function keeps the same trigger", () => {
-      const trigger = {
-        eventType: "google.pubsub.topic.publish",
-        eventFilters: {},
-        retry: false,
+    it("Allows endpionts with mem and no concurrency", () => {
+      const ep: backend.Endpoint = {
+        ...ENDPOINT_BASE,
+        availableMemoryMb: 256,
       };
-      const fn: FunctionSpec = {
-        ...CLOUD_FUNCTION,
-        trigger,
-      };
-      const exFn: FunctionSpec = {
-        ...CLOUD_FUNCTION,
-        trigger,
-      };
-
-      expect(() => {
-        validate.checkForInvalidChangeOfTrigger(fn, exFn);
-      }).not.to.throw();
+      expect(() => validate.endpointsAreValid(backend.of(ep))).to.not.throw;
     });
 
-    it("should not throw if a https function stays as a https function", () => {
-      const trigger = { allowInsecure: true };
-      const fn: FunctionSpec = {
-        ...CLOUD_FUNCTION,
-        trigger,
+    it("Allows explicitly one concurrent", () => {
+      const ep: backend.Endpoint = {
+        ...ENDPOINT_BASE,
+        concurrency: 1,
       };
-      const exFn: FunctionSpec = {
-        ...CLOUD_FUNCTION,
-        trigger,
+      expect(() => validate.endpointsAreValid(backend.of(ep))).to.not.throw;
+    });
+
+    it("Allows endpoints with enough mem and no concurrency", () => {
+      for (const mem of [2 << 10, 4 << 10, 8 << 10] as backend.MemoryOptions[]) {
+        const ep: backend.Endpoint = {
+          ...ENDPOINT_BASE,
+          availableMemoryMb: mem,
+        };
+        expect(() => validate.endpointsAreValid(backend.of(ep))).to.not.throw;
+      }
+    });
+
+    it("Allows endpoints with enough mem and explicit concurrency", () => {
+      for (const mem of [2 << 10, 4 << 10, 8 << 10] as backend.MemoryOptions[]) {
+        const ep: backend.Endpoint = {
+          ...ENDPOINT_BASE,
+          availableMemoryMb: mem,
+          concurrency: 42,
+        };
+        expect(() => validate.endpointsAreValid(backend.of(ep))).to.not.throw;
+      }
+    });
+
+    it("disallows concurrency with too little memory (implicit)", () => {
+      const ep: backend.Endpoint = {
+        ...ENDPOINT_BASE,
+        concurrency: 2,
+      };
+      expect(() => validate.endpointsAreValid(backend.of(ep))).to.throw(
+        /they have fewer than 2GB memory/
+      );
+    });
+
+    it("disallows concurrency with too little memory (explicit)", () => {
+      const ep: backend.Endpoint = {
+        ...ENDPOINT_BASE,
+        concurrency: 2,
+        availableMemoryMb: 512,
+      };
+      expect(() => validate.endpointsAreValid(backend.of(ep))).to.throw(
+        /they have fewer than 2GB memory/
+      );
+    });
+
+    it("disallows multiple beforeCreate blocking", () => {
+      const ep1: backend.Endpoint = {
+        platform: "gcfv1",
+        id: "id1",
+        region: "us-east1",
+        project: "project",
+        entryPoint: "func1",
+        runtime: "nodejs16",
+        blockingTrigger: {
+          eventType: BEFORE_CREATE_EVENT,
+        },
+      };
+      const ep2: backend.Endpoint = {
+        platform: "gcfv1",
+        id: "id2",
+        region: "us-east1",
+        project: "project",
+        entryPoint: "func2",
+        runtime: "nodejs16",
+        blockingTrigger: {
+          eventType: BEFORE_CREATE_EVENT,
+        },
       };
 
-      expect(() => {
-        validate.checkForInvalidChangeOfTrigger(fn, exFn);
-      }).not.to.throw();
+      expect(() => validate.endpointsAreValid(backend.of(ep1, ep2))).to.throw(
+        `Can only create at most one Auth Blocking Trigger for ${BEFORE_CREATE_EVENT} events`
+      );
+    });
+
+    it("disallows multiple beforeSignIn blocking", () => {
+      const ep1: backend.Endpoint = {
+        platform: "gcfv1",
+        id: "id1",
+        region: "us-east1",
+        project: "project",
+        entryPoint: "func1",
+        runtime: "nodejs16",
+        blockingTrigger: {
+          eventType: BEFORE_SIGN_IN_EVENT,
+        },
+      };
+      const ep2: backend.Endpoint = {
+        platform: "gcfv1",
+        id: "id2",
+        region: "us-east1",
+        project: "project",
+        entryPoint: "func2",
+        runtime: "nodejs16",
+        blockingTrigger: {
+          eventType: BEFORE_SIGN_IN_EVENT,
+        },
+      };
+
+      expect(() => validate.endpointsAreValid(backend.of(ep1, ep2))).to.throw(
+        `Can only create at most one Auth Blocking Trigger for ${BEFORE_SIGN_IN_EVENT} events`
+      );
+    });
+
+    it("Allows valid blocking functions", () => {
+      const ep1: backend.Endpoint = {
+        platform: "gcfv1",
+        id: "id1",
+        region: "us-east1",
+        project: "project",
+        entryPoint: "func1",
+        runtime: "nodejs16",
+        blockingTrigger: {
+          eventType: BEFORE_CREATE_EVENT,
+          options: {
+            accessToken: false,
+            idToken: true,
+          },
+        },
+      };
+      const ep2: backend.Endpoint = {
+        platform: "gcfv1",
+        id: "id2",
+        region: "us-east1",
+        project: "project",
+        entryPoint: "func2",
+        runtime: "nodejs16",
+        blockingTrigger: {
+          eventType: BEFORE_SIGN_IN_EVENT,
+          options: {
+            accessToken: true,
+          },
+        },
+      };
+      const want: backend.Backend = {
+        ...backend.of(ep1, ep2),
+      };
+
+      expect(() => validate.endpointsAreValid(want)).to.not.throw();
     });
   });
 
-  describe("packageJsonIsValid", () => {
-    const sandbox: sinon.SinonSandbox = sinon.createSandbox();
-    let cjsonLoadStub: sinon.SinonStub;
-    let fileExistsStub: sinon.SinonStub;
+  describe("endpointsAreUnqiue", () => {
+    const ENDPOINT_BASE: backend.Endpoint = {
+      platform: "gcfv2",
+      id: "id",
+      region: "us-east1",
+      project: "project",
+      entryPoint: "func",
+      runtime: "nodejs16",
+      httpsTrigger: {},
+    };
+
+    it("passes given unqiue ids", () => {
+      const b1 = backend.of(
+        { ...ENDPOINT_BASE, id: "i1", region: "r1" },
+        { ...ENDPOINT_BASE, id: "i2", region: "r1" }
+      );
+      const b2 = backend.of(
+        { ...ENDPOINT_BASE, id: "i3", region: "r2" },
+        { ...ENDPOINT_BASE, id: "i4", region: "r2" }
+      );
+      expect(() => validate.endpointsAreUnique({ b1, b2 })).to.not.throw;
+    });
+
+    it("passes given unique id, region pairs", () => {
+      const b1 = backend.of(
+        { ...ENDPOINT_BASE, id: "i1", region: "r1" },
+        { ...ENDPOINT_BASE, id: "i2", region: "r1" }
+      );
+      const b2 = backend.of(
+        { ...ENDPOINT_BASE, id: "i1", region: "r2" },
+        { ...ENDPOINT_BASE, id: "i2", region: "r2" }
+      );
+      expect(() => validate.endpointsAreUnique({ b1, b2 })).to.not.throw;
+    });
+
+    it("throws given non-unique id region pairs", () => {
+      const b1 = backend.of({ ...ENDPOINT_BASE, id: "i1", region: "r1" });
+      const b2 = backend.of({ ...ENDPOINT_BASE, id: "i1", region: "r1" });
+      expect(() => validate.endpointsAreUnique({ b1, b2 })).to.throw(
+        /projects\/project\/locations\/r1\/functions\/i1: b1,b2/
+      );
+    });
+
+    it("throws given non-unique id region pairs across all codebases", () => {
+      const b1 = backend.of({ ...ENDPOINT_BASE, id: "i1", region: "r1" });
+      const b2 = backend.of({ ...ENDPOINT_BASE, id: "i1", region: "r1" });
+      const b3 = backend.of({ ...ENDPOINT_BASE, id: "i1", region: "r1" });
+      expect(() => validate.endpointsAreUnique({ b1, b2, b3 })).to.throw(
+        /projects\/project\/locations\/r1\/functions\/i1: b1,b2,b3/
+      );
+    });
+
+    it("throws given multiple conflicts", () => {
+      const b1 = backend.of(
+        { ...ENDPOINT_BASE, id: "i1", region: "r1" },
+        { ...ENDPOINT_BASE, id: "i2", region: "r2" }
+      );
+      const b2 = backend.of({ ...ENDPOINT_BASE, id: "i1", region: "r1" });
+      const b3 = backend.of({ ...ENDPOINT_BASE, id: "i2", region: "r2" });
+      expect(() => validate.endpointsAreUnique({ b1, b2, b3 })).to.throw(/b1,b2.*b1,b3/s);
+    });
+  });
+
+  describe("secretsAreValid", () => {
+    const project = "project";
+
+    const ENDPOINT_BASE: Omit<backend.Endpoint, "httpsTrigger"> = {
+      project,
+      platform: "gcfv2",
+      id: "id",
+      region: "region",
+      entryPoint: "entry",
+      runtime: "nodejs16",
+    };
+    const ENDPOINT: backend.Endpoint = {
+      ...ENDPOINT_BASE,
+      httpsTrigger: {},
+    };
+
+    const secret: secretManager.Secret = { projectId: project, name: "MY_SECRET" };
+
+    let secretVersionStub: sinon.SinonStub;
 
     beforeEach(() => {
-      fileExistsStub = sandbox.stub(fsutils, "fileExistsSync");
-      cjsonLoadStub = sandbox.stub(cjson, "load");
+      secretVersionStub = sinon.stub(secretManager, "getSecretVersion").rejects("Unexpected call");
     });
 
     afterEach(() => {
-      sandbox.restore();
+      secretVersionStub.restore();
     });
 
-    it("should throw error if package.json file is missing", () => {
-      fileExistsStub.withArgs("sourceDir/package.json").returns(false);
-
-      expect(() => {
-        validate.packageJsonIsValid("sourceDirName", "sourceDir", "projectDir", false);
-      }).to.throw(FirebaseError, "No npm package found");
+    it("passes validation with empty backend", () => {
+      expect(validate.secretsAreValid(project, backend.empty())).to.not.be.rejected;
     });
 
-    it("should throw error if functions source file is missing", () => {
-      cjsonLoadStub.returns({ name: "my-project", engines: { node: "8" } });
-      fileExistsStub.withArgs("sourceDir/package.json").returns(true);
-      fileExistsStub.withArgs("sourceDir/index.js").returns(false);
-
-      expect(() => {
-        validate.packageJsonIsValid("sourceDirName", "sourceDir", "projectDir", false);
-      }).to.throw(FirebaseError, "does not exist, can't deploy");
+    it("passes validation with no secret env vars", () => {
+      const b = backend.of({
+        ...ENDPOINT,
+        platform: "gcfv2",
+      });
+      expect(validate.secretsAreValid(project, b)).to.not.be.rejected;
     });
 
-    it("should throw error if main is defined and that file is missing", () => {
-      cjsonLoadStub.returns({ name: "my-project", main: "src/main.js", engines: { node: "8" } });
-      fileExistsStub.withArgs("sourceDir/package.json").returns(true);
-      fileExistsStub.withArgs("sourceDir/src/main.js").returns(false);
-
-      expect(() => {
-        validate.packageJsonIsValid("sourceDirName", "sourceDir", "projectDir", false);
-      }).to.throw(FirebaseError, "does not exist, can't deploy");
-    });
-
-    it("should not throw error if runtime is set in the config and the engines field is not set", () => {
-      cjsonLoadStub.returns({ name: "my-project" });
-      fileExistsStub.withArgs("sourceDir/package.json").returns(true);
-      fileExistsStub.withArgs("sourceDir/index.js").returns(true);
-
-      expect(() => {
-        validate.packageJsonIsValid("sourceDirName", "sourceDir", "projectDir", true);
-      }).to.not.throw();
-    });
-
-    context("runtime is not set in the config", () => {
-      it("should throw error if runtime is not set in the config and the engines field is not set", () => {
-        cjsonLoadStub.returns({ name: "my-project" });
-        fileExistsStub.withArgs("sourceDir/package.json").returns(true);
-        fileExistsStub.withArgs("sourceDir/index.js").returns(true);
-
-        expect(() => {
-          validate.packageJsonIsValid("sourceDirName", "sourceDir", "projectDir", false);
-        }).to.throw(FirebaseError, RUNTIME_NOT_SET);
+    it("fails validation given endpoint with secrets targeting unsupported platform", () => {
+      const b = backend.of({
+        ...ENDPOINT,
+        platform: "gcfv2",
+        secretEnvironmentVariables: [
+          {
+            projectId: project,
+            secret: "MY_SECRET",
+            key: "MY_SECRET",
+          },
+        ],
       });
 
-      it("should throw error if engines field is set but node field missing", () => {
-        cjsonLoadStub.returns({ name: "my-project", engines: {} });
-        fileExistsStub.withArgs("sourceDir/package.json").returns(true);
-        fileExistsStub.withArgs("sourceDir/index.js").returns(true);
+      expect(validate.secretsAreValid(project, b)).to.be.rejectedWith(FirebaseError);
+    });
 
-        expect(() => {
-          validate.packageJsonIsValid("sourceDirName", "sourceDir", "projectDir", false);
-        }).to.throw(FirebaseError, RUNTIME_NOT_SET);
+    it("fails validation given non-existent secret version", () => {
+      secretVersionStub.rejects({ reason: "Secret version does not exist" });
+
+      const b = backend.of({
+        ...ENDPOINT,
+        platform: "gcfv1",
+        secretEnvironmentVariables: [
+          {
+            projectId: project,
+            secret: "MY_SECRET",
+            key: "MY_SECRET",
+          },
+        ],
+      });
+      expect(validate.secretsAreValid(project, b)).to.be.rejectedWith(FirebaseError);
+    });
+
+    it("fails validation given disabled secret version", () => {
+      secretVersionStub.resolves({
+        secret,
+        versionId: "1",
+        state: "DISABLED",
       });
 
-      it("should not throw error if package.json, functions file exists and engines present", () => {
-        cjsonLoadStub.returns({ name: "my-project", engines: { node: "8" } });
-        fileExistsStub.withArgs("sourceDir/package.json").returns(true);
-        fileExistsStub.withArgs("sourceDir/index.js").returns(true);
-
-        expect(() => {
-          validate.packageJsonIsValid("sourceDirName", "sourceDir", "projectDir", false);
-        }).to.not.throw();
+      const b = backend.of({
+        ...ENDPOINT,
+        platform: "gcfv1",
+        secretEnvironmentVariables: [
+          {
+            projectId: project,
+            secret: "MY_SECRET",
+            key: "MY_SECRET",
+          },
+        ],
       });
+      expect(validate.secretsAreValid(project, b)).to.be.rejected;
+    });
+
+    it("passes validation and resolves latest version given valid secret config", async () => {
+      secretVersionStub.withArgs(project, secret.name, "latest").resolves({
+        secret,
+        versionId: "2",
+        state: "ENABLED",
+      });
+
+      const b = backend.of({
+        ...ENDPOINT,
+        platform: "gcfv1",
+        secretEnvironmentVariables: [
+          {
+            projectId: project,
+            secret: "MY_SECRET",
+            key: "MY_SECRET",
+          },
+        ],
+      });
+
+      await validate.secretsAreValid(project, b);
+      expect(backend.allEndpoints(b)[0].secretEnvironmentVariables![0].version).to.equal("2");
     });
   });
 });

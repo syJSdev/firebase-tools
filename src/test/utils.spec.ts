@@ -258,4 +258,76 @@ describe("utils", () => {
       await expect(utils.streamToString(stream)).to.eventually.equal("hello world");
     });
   });
+
+  describe("allSettled", () => {
+    it("handles arrays of length zero", async () => {
+      const res = await utils.allSettled([]);
+      expect(res).to.deep.equal([]);
+    });
+
+    it("handles a simple success", async () => {
+      const res = await utils.allSettled([Promise.resolve(42)]);
+      expect(res).to.deep.equal([
+        {
+          status: "fulfilled",
+          value: 42,
+        },
+      ]);
+    });
+
+    it("handles a simple failure", async () => {
+      const res = await utils.allSettled([Promise.reject(new Error("oh noes!"))]);
+      expect(res.length).to.equal(1);
+      expect(res[0].status).to.equal("rejected");
+      expect((res[0] as utils.PromiseRejectedResult).reason).to.be.instanceOf(Error);
+      expect((res[0] as any).reason?.message).to.equal("oh noes!");
+    });
+
+    it("waits for all settled", async () => {
+      // Intetionally failing with a non-error to make matching easier
+      const reject = Promise.reject("fail fast");
+      const resolve = new Promise((res) => {
+        setTimeout(() => res(42), 20);
+      });
+
+      const results = await utils.allSettled([reject, resolve]);
+      expect(results).to.deep.equal([
+        { status: "rejected", reason: "fail fast" },
+        { status: "fulfilled", value: 42 },
+      ]);
+    });
+  });
+
+  describe("groupBy", () => {
+    it("should transform simple array by fn", () => {
+      const arr = [3.4, 1.2, 7.7, 2, 3.9];
+      expect(utils.groupBy(arr, Math.floor)).to.deep.equal({
+        1: [1.2],
+        2: [2],
+        3: [3.4, 3.9],
+        7: [7.7],
+      });
+    });
+
+    it("should transform array of objects by fn", () => {
+      const arr = [
+        { id: 1, location: "us" },
+        { id: 2, location: "us" },
+        { id: 3, location: "asia" },
+        { id: 4, location: "europe" },
+        { id: 5, location: "asia" },
+      ];
+      expect(utils.groupBy(arr, (obj) => obj.location)).to.deep.equal({
+        us: [
+          { id: 1, location: "us" },
+          { id: 2, location: "us" },
+        ],
+        asia: [
+          { id: 3, location: "asia" },
+          { id: 5, location: "asia" },
+        ],
+        europe: [{ id: 4, location: "europe" }],
+      });
+    });
+  });
 });

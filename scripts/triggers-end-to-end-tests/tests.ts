@@ -7,7 +7,6 @@ import * as path from "path";
 
 import { CLIProcess } from "../integration-helpers/cli";
 import { FrameworkOptions, TriggerEndToEndTest } from "../integration-helpers/framework";
-import { assert } from "sinon";
 
 const FIREBASE_PROJECT = process.env.FBTOOLS_TARGET_PROJECT || "";
 const ADMIN_CREDENTIAL = {
@@ -45,7 +44,7 @@ function readConfig(): FrameworkOptions {
 
 function logIncludes(msg: string) {
   return (data: unknown) => {
-    if (typeof data != "string" && !Buffer.isBuffer(data)) {
+    if (typeof data !== "string" && !Buffer.isBuffer(data)) {
       throw new Error(`data is not a string or buffer (${typeof data})`);
     }
     return data.includes(msg);
@@ -198,6 +197,7 @@ describe("pubsub emulator function triggers", () => {
 
   it("should have have triggered cloud functions", () => {
     expect(test.pubsubTriggerCount).to.equal(1);
+    expect(test.pubsubV2TriggerCount).to.equal(1);
   });
 
   it("should write to the scheduled pubsub emulator", async function (this) {
@@ -243,6 +243,228 @@ describe("auth emulator function triggers", () => {
   });
 });
 
+describe("storage emulator function triggers", () => {
+  let test: TriggerEndToEndTest;
+
+  before(async function (this) {
+    this.timeout(TEST_SETUP_TIMEOUT);
+
+    expect(FIREBASE_PROJECT).to.exist.and.not.be.empty;
+
+    const config = readConfig();
+    test = new TriggerEndToEndTest(FIREBASE_PROJECT, __dirname, config);
+    await test.startEmulators(["--only", "functions,storage"]);
+  });
+
+  after(async function (this) {
+    this.timeout(EMULATORS_SHUTDOWN_DELAY_MS);
+    await test.stopEmulators();
+  });
+
+  it("should write to the default bucket of storage emulator", async function (this) {
+    this.timeout(EMULATOR_TEST_TIMEOUT);
+
+    const response = await test.writeToDefaultStorage();
+    expect(response.status).to.equal(200);
+    await new Promise((resolve) => setTimeout(resolve, EMULATORS_WRITE_DELAY_MS));
+  });
+
+  it("should have triggered cloud functions", () => {
+    /* on object create one event fires (finalize) */
+    // default bucket
+    expect(test.storageFinalizedTriggerCount).to.equal(1);
+    expect(test.storageV2FinalizedTriggerCount).to.equal(1);
+    expect(test.storageMetadataTriggerCount).to.equal(0);
+    expect(test.storageV2MetadataTriggerCount).to.equal(0);
+    expect(test.storageDeletedTriggerCount).to.equal(0);
+    expect(test.storageV2DeletedTriggerCount).to.equal(0);
+    // specific bucket
+    expect(test.storageBucketFinalizedTriggerCount).to.equal(0);
+    expect(test.storageBucketV2FinalizedTriggerCount).to.equal(0);
+    expect(test.storageBucketMetadataTriggerCount).to.equal(0);
+    expect(test.storageBucketV2MetadataTriggerCount).to.equal(0);
+    expect(test.storageBucketDeletedTriggerCount).to.equal(0);
+    expect(test.storageBucketV2DeletedTriggerCount).to.equal(0);
+    test.resetCounts();
+  });
+
+  it("should write to a specific bucket of storage emulator", async function (this) {
+    this.timeout(EMULATOR_TEST_TIMEOUT);
+
+    const response = await test.writeToSpecificStorageBucket();
+    expect(response.status).to.equal(200);
+    await new Promise((resolve) => setTimeout(resolve, EMULATORS_WRITE_DELAY_MS));
+  });
+
+  it("should have triggered cloud functions", () => {
+    /* on object create one event fires (finalize) */
+    // default bucket
+    expect(test.storageFinalizedTriggerCount).to.equal(0);
+    expect(test.storageV2FinalizedTriggerCount).to.equal(0);
+    expect(test.storageMetadataTriggerCount).to.equal(0);
+    expect(test.storageV2MetadataTriggerCount).to.equal(0);
+    expect(test.storageDeletedTriggerCount).to.equal(0);
+    expect(test.storageV2DeletedTriggerCount).to.equal(0);
+    // specific bucket
+    expect(test.storageBucketFinalizedTriggerCount).to.equal(1);
+    expect(test.storageBucketV2FinalizedTriggerCount).to.equal(1);
+    expect(test.storageBucketMetadataTriggerCount).to.equal(0);
+    expect(test.storageBucketV2MetadataTriggerCount).to.equal(0);
+    expect(test.storageBucketDeletedTriggerCount).to.equal(0);
+    expect(test.storageBucketV2DeletedTriggerCount).to.equal(0);
+    test.resetCounts();
+  });
+
+  it("should write and update metadata from the default bucket of the storage emulator", async function (this) {
+    this.timeout(EMULATOR_TEST_TIMEOUT);
+
+    const response = await test.updateMetadataDefaultStorage();
+    expect(response.status).to.equal(200);
+    await new Promise((resolve) => setTimeout(resolve, EMULATORS_WRITE_DELAY_MS));
+  });
+
+  it("should have triggered cloud functions", () => {
+    /* on object create one event fires (finalize) */
+    /* on update one event fires (metadataUpdate) */
+    // default bucket
+    expect(test.storageFinalizedTriggerCount).to.equal(1);
+    expect(test.storageV2FinalizedTriggerCount).to.equal(1);
+    expect(test.storageMetadataTriggerCount).to.equal(1);
+    expect(test.storageV2MetadataTriggerCount).to.equal(1);
+    expect(test.storageDeletedTriggerCount).to.equal(0);
+    expect(test.storageV2DeletedTriggerCount).to.equal(0);
+    // specific bucket
+    expect(test.storageBucketFinalizedTriggerCount).to.equal(0);
+    expect(test.storageBucketV2FinalizedTriggerCount).to.equal(0);
+    expect(test.storageBucketMetadataTriggerCount).to.equal(0);
+    expect(test.storageBucketV2MetadataTriggerCount).to.equal(0);
+    expect(test.storageBucketDeletedTriggerCount).to.equal(0);
+    expect(test.storageBucketV2DeletedTriggerCount).to.equal(0);
+    test.resetCounts();
+  });
+
+  it("should write and update metadata from a specific bucket of the storage emulator", async function (this) {
+    this.timeout(EMULATOR_TEST_TIMEOUT);
+
+    const response = await test.updateMetadataSpecificStorageBucket();
+    expect(response.status).to.equal(200);
+    await new Promise((resolve) => setTimeout(resolve, EMULATORS_WRITE_DELAY_MS));
+  });
+
+  it("should have triggered cloud functions", () => {
+    /* on object create one event fires (finalize) */
+    /* on update one event fires (metadataUpdate) */
+    // default bucket
+    expect(test.storageFinalizedTriggerCount).to.equal(0);
+    expect(test.storageV2FinalizedTriggerCount).to.equal(0);
+    expect(test.storageMetadataTriggerCount).to.equal(0);
+    expect(test.storageV2MetadataTriggerCount).to.equal(0);
+    expect(test.storageDeletedTriggerCount).to.equal(0);
+    expect(test.storageV2DeletedTriggerCount).to.equal(0);
+    // specific bucket
+    expect(test.storageBucketFinalizedTriggerCount).to.equal(1);
+    expect(test.storageBucketV2FinalizedTriggerCount).to.equal(1);
+    expect(test.storageBucketMetadataTriggerCount).to.equal(1);
+    expect(test.storageBucketV2MetadataTriggerCount).to.equal(1);
+    expect(test.storageBucketDeletedTriggerCount).to.equal(0);
+    expect(test.storageBucketV2DeletedTriggerCount).to.equal(0);
+    test.resetCounts();
+  });
+
+  it("should write and delete from the default bucket of the storage emulator", async function (this) {
+    this.timeout(EMULATOR_TEST_TIMEOUT);
+
+    const response = await test.updateDeleteFromDefaultStorage();
+    expect(response.status).to.equal(200);
+    await new Promise((resolve) => setTimeout(resolve, EMULATORS_WRITE_DELAY_MS));
+  });
+
+  it("should have triggered cloud functions", () => {
+    /* on create one event fires (finalize) */
+    /* on delete one event fires (delete) */
+    // default bucket
+    expect(test.storageFinalizedTriggerCount).to.equal(1);
+    expect(test.storageV2FinalizedTriggerCount).to.equal(1);
+    expect(test.storageMetadataTriggerCount).to.equal(0);
+    expect(test.storageV2MetadataTriggerCount).to.equal(0);
+    expect(test.storageDeletedTriggerCount).to.equal(1);
+    expect(test.storageV2DeletedTriggerCount).to.equal(1);
+    // specific bucket
+    expect(test.storageBucketFinalizedTriggerCount).to.equal(0);
+    expect(test.storageBucketV2FinalizedTriggerCount).to.equal(0);
+    expect(test.storageBucketMetadataTriggerCount).to.equal(0);
+    expect(test.storageBucketV2MetadataTriggerCount).to.equal(0);
+    expect(test.storageBucketDeletedTriggerCount).to.equal(0);
+    expect(test.storageBucketV2DeletedTriggerCount).to.equal(0);
+    test.resetCounts();
+  });
+
+  it("should write and delete from a specific bucket of the storage emulator", async function (this) {
+    this.timeout(EMULATOR_TEST_TIMEOUT);
+
+    const response = await test.updateDeleteFromSpecificStorageBucket();
+    expect(response.status).to.equal(200);
+    await new Promise((resolve) => setTimeout(resolve, EMULATORS_WRITE_DELAY_MS));
+  });
+
+  it("should have triggered cloud functions", () => {
+    /* on create one event fires (finalize) */
+    /* on delete one event fires (delete) */
+    // default bucket
+    expect(test.storageFinalizedTriggerCount).to.equal(0);
+    expect(test.storageV2FinalizedTriggerCount).to.equal(0);
+    expect(test.storageMetadataTriggerCount).to.equal(0);
+    expect(test.storageV2MetadataTriggerCount).to.equal(0);
+    expect(test.storageDeletedTriggerCount).to.equal(0);
+    expect(test.storageV2DeletedTriggerCount).to.equal(0);
+    // specific bucket
+    expect(test.storageBucketFinalizedTriggerCount).to.equal(1);
+    expect(test.storageBucketV2FinalizedTriggerCount).to.equal(1);
+    expect(test.storageBucketMetadataTriggerCount).to.equal(0);
+    expect(test.storageBucketV2MetadataTriggerCount).to.equal(0);
+    expect(test.storageBucketDeletedTriggerCount).to.equal(1);
+    expect(test.storageBucketV2DeletedTriggerCount).to.equal(1);
+    test.resetCounts();
+  });
+});
+
+describe("onCall function triggers", () => {
+  let test: TriggerEndToEndTest;
+
+  before(async function (this) {
+    this.timeout(TEST_SETUP_TIMEOUT);
+
+    expect(FIREBASE_PROJECT).to.exist.and.not.be.empty;
+
+    const config = readConfig();
+    test = new TriggerEndToEndTest(FIREBASE_PROJECT, __dirname, config);
+    await test.startEmulators(["--only", "functions"]);
+  });
+
+  after(async function (this) {
+    this.timeout(EMULATORS_SHUTDOWN_DELAY_MS);
+    await test.stopEmulators();
+  });
+
+  it("should make a call to v1 callable function", async function (this) {
+    this.timeout(EMULATOR_TEST_TIMEOUT);
+
+    const response = await test.invokeCallableFunction("onCall", { data: "foobar" });
+    expect(response.status).to.equal(200);
+    const body = await response.json();
+    expect(body).to.deep.equal({ result: "foobar" });
+  });
+
+  it("should make a call to v2 callable function", async function (this) {
+    this.timeout(EMULATOR_TEST_TIMEOUT);
+
+    const response = await test.invokeCallableFunction("oncallv2", { data: "foobar" });
+    expect(response.status).to.equal(200);
+    const body = await response.json();
+    expect(body).to.deep.equal({ result: "foobar" });
+  });
+});
+
 describe("import/export end to end", () => {
   it("should be able to import/export firestore data", async function (this) {
     this.timeout(2 * TEST_SETUP_TIMEOUT);
@@ -255,7 +477,7 @@ describe("import/export end to end", () => {
       FIREBASE_PROJECT,
       ["--only", "firestore"],
       (data: unknown) => {
-        if (typeof data != "string" && !Buffer.isBuffer(data)) {
+        if (typeof data !== "string" && !Buffer.isBuffer(data)) {
           throw new Error(`data is not a string or buffer (${typeof data})`);
         }
         return data.includes(ALL_EMULATORS_STARTED_LOG);
@@ -266,7 +488,7 @@ describe("import/export end to end", () => {
     const exportCLI = new CLIProcess("2", __dirname);
     const exportPath = fs.mkdtempSync(path.join(os.tmpdir(), "emulator-data"));
     await exportCLI.start("emulators:export", FIREBASE_PROJECT, [exportPath], (data: unknown) => {
-      if (typeof data != "string" && !Buffer.isBuffer(data)) {
+      if (typeof data !== "string" && !Buffer.isBuffer(data)) {
         throw new Error(`data is not a string or buffer (${typeof data})`);
       }
       return data.includes("Export complete");
@@ -283,7 +505,7 @@ describe("import/export end to end", () => {
       FIREBASE_PROJECT,
       ["--only", "firestore", "--import", exportPath],
       (data: unknown) => {
-        if (typeof data != "string" && !Buffer.isBuffer(data)) {
+        if (typeof data !== "string" && !Buffer.isBuffer(data)) {
           throw new Error(`data is not a string or buffer (${typeof data})`);
         }
         return data.includes(ALL_EMULATORS_STARTED_LOG);
@@ -306,7 +528,7 @@ describe("import/export end to end", () => {
       FIREBASE_PROJECT,
       ["--only", "database"],
       (data: unknown) => {
-        if (typeof data != "string" && !Buffer.isBuffer(data)) {
+        if (typeof data !== "string" && !Buffer.isBuffer(data)) {
           throw new Error(`data is not a string or buffer (${typeof data})`);
         }
         return data.includes(ALL_EMULATORS_STARTED_LOG);
@@ -355,7 +577,7 @@ describe("import/export end to end", () => {
     const exportCLI = new CLIProcess("2", __dirname);
     const exportPath = fs.mkdtempSync(path.join(os.tmpdir(), "emulator-data"));
     await exportCLI.start("emulators:export", FIREBASE_PROJECT, [exportPath], (data: unknown) => {
-      if (typeof data != "string" && !Buffer.isBuffer(data)) {
+      if (typeof data !== "string" && !Buffer.isBuffer(data)) {
         throw new Error(`data is not a string or buffer (${typeof data})`);
       }
       return data.includes("Export complete");
@@ -377,7 +599,7 @@ describe("import/export end to end", () => {
       FIREBASE_PROJECT,
       ["--only", "database", "--import", exportPath, "--export-on-exit"],
       (data: unknown) => {
-        if (typeof data != "string" && !Buffer.isBuffer(data)) {
+        if (typeof data !== "string" && !Buffer.isBuffer(data)) {
           throw new Error(`data is not a string or buffer (${typeof data})`);
         }
         return data.includes(ALL_EMULATORS_STARTED_LOG);
@@ -421,7 +643,7 @@ describe("import/export end to end", () => {
     const emulatorsCLI = new CLIProcess("1", __dirname);
 
     await emulatorsCLI.start("emulators:start", project, ["--only", "auth"], (data: unknown) => {
-      if (typeof data != "string" && !Buffer.isBuffer(data)) {
+      if (typeof data !== "string" && !Buffer.isBuffer(data)) {
         throw new Error(`data is not a string or buffer (${typeof data})`);
       }
       return data.includes(ALL_EMULATORS_STARTED_LOG);
@@ -450,7 +672,7 @@ describe("import/export end to end", () => {
       const exportCLI = new CLIProcess("2", __dirname);
       const exportPath = fs.mkdtempSync(path.join(os.tmpdir(), "emulator-data"));
       await exportCLI.start("emulators:export", project, [exportPath], (data: unknown) => {
-        if (typeof data != "string" && !Buffer.isBuffer(data)) {
+        if (typeof data !== "string" && !Buffer.isBuffer(data)) {
           throw new Error(`data is not a string or buffer (${typeof data})`);
         }
         return data.includes("Export complete");
@@ -467,6 +689,7 @@ describe("import/export end to end", () => {
         signIn: {
           allowDuplicateEmails: false,
         },
+        usageMode: "DEFAULT",
       });
 
       const accountsPath = path.join(exportPath, "auth_export", "accounts.json");
@@ -499,7 +722,7 @@ describe("import/export end to end", () => {
         project,
         ["--only", "auth", "--import", exportPath],
         (data: unknown) => {
-          if (typeof data != "string" && !Buffer.isBuffer(data)) {
+          if (typeof data !== "string" && !Buffer.isBuffer(data)) {
             throw new Error(`data is not a string or buffer (${typeof data})`);
           }
           return data.includes(ALL_EMULATORS_STARTED_LOG);
@@ -518,6 +741,90 @@ describe("import/export end to end", () => {
     }
   });
 
+  it("should be able to import/export auth data with many users", async function (this) {
+    this.timeout(2 * TEST_SETUP_TIMEOUT);
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+
+    // Start up emulator suite
+    const project = FIREBASE_PROJECT || "example";
+    const emulatorsCLI = new CLIProcess("1", __dirname);
+
+    await emulatorsCLI.start("emulators:start", project, ["--only", "auth"], (data: unknown) => {
+      if (typeof data !== "string" && !Buffer.isBuffer(data)) {
+        throw new Error(`data is not a string or buffer (${typeof data})`);
+      }
+      return data.includes(ALL_EMULATORS_STARTED_LOG);
+    });
+
+    // Create some accounts to export:
+    const accountCount = 777; // ~120KB data when exported
+    const config = readConfig();
+    const port = config.emulators!.auth.port;
+    try {
+      process.env.FIREBASE_AUTH_EMULATOR_HOST = `localhost:${port}`;
+      const adminApp = admin.initializeApp(
+        {
+          projectId: project,
+          credential: ADMIN_CREDENTIAL,
+        },
+        "admin-app2"
+      );
+      for (let i = 0; i < accountCount; i++) {
+        await adminApp
+          .auth()
+          .createUser({ uid: `u${i}`, email: `u${i}@example.com`, password: "testing" });
+      }
+      // Ask for export
+      const exportCLI = new CLIProcess("2", __dirname);
+      const exportPath = fs.mkdtempSync(path.join(os.tmpdir(), "emulator-data"));
+      await exportCLI.start("emulators:export", project, [exportPath], (data: unknown) => {
+        if (typeof data !== "string" && !Buffer.isBuffer(data)) {
+          throw new Error(`data is not a string or buffer (${typeof data})`);
+        }
+        return data.includes("Export complete");
+      });
+      await exportCLI.stop();
+
+      // Stop the suite
+      await emulatorsCLI.stop();
+
+      // Confirm the data is exported as expected
+      const configPath = path.join(exportPath, "auth_export", "config.json");
+      const configData = JSON.parse(fs.readFileSync(configPath).toString());
+      expect(configData).to.deep.equal({
+        signIn: {
+          allowDuplicateEmails: false,
+        },
+        usageMode: "DEFAULT",
+      });
+
+      const accountsPath = path.join(exportPath, "auth_export", "accounts.json");
+      const accountsData = JSON.parse(fs.readFileSync(accountsPath).toString());
+      expect(accountsData.users).to.have.length(accountCount);
+
+      // Attempt to import
+      const importCLI = new CLIProcess("3", __dirname);
+      await importCLI.start(
+        "emulators:start",
+        project,
+        ["--only", "auth", "--import", exportPath],
+        (data: unknown) => {
+          if (typeof data !== "string" && !Buffer.isBuffer(data)) {
+            throw new Error(`data is not a string or buffer (${typeof data})`);
+          }
+          return data.includes(ALL_EMULATORS_STARTED_LOG);
+        }
+      );
+
+      // Check users are indeed imported correctly
+      const user = await adminApp.auth().getUserByEmail(`u${accountCount - 1}@example.com`);
+      expect(user.passwordHash).to.match(/:password=testing$/);
+
+      await importCLI.stop();
+    } finally {
+      delete process.env.FIREBASE_AUTH_EMULATOR_HOST;
+    }
+  });
   it("should be able to export / import auth data with no users", async function (this) {
     this.timeout(2 * TEST_SETUP_TIMEOUT);
     await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -527,7 +834,7 @@ describe("import/export end to end", () => {
     const emulatorsCLI = new CLIProcess("1", __dirname);
 
     await emulatorsCLI.start("emulators:start", project, ["--only", "auth"], (data: unknown) => {
-      if (typeof data != "string" && !Buffer.isBuffer(data)) {
+      if (typeof data !== "string" && !Buffer.isBuffer(data)) {
         throw new Error(`data is not a string or buffer (${typeof data})`);
       }
       return data.includes(ALL_EMULATORS_STARTED_LOG);
@@ -537,7 +844,7 @@ describe("import/export end to end", () => {
     const exportCLI = new CLIProcess("2", __dirname);
     const exportPath = fs.mkdtempSync(path.join(os.tmpdir(), "emulator-data"));
     await exportCLI.start("emulators:export", project, [exportPath], (data: unknown) => {
-      if (typeof data != "string" && !Buffer.isBuffer(data)) {
+      if (typeof data !== "string" && !Buffer.isBuffer(data)) {
         throw new Error(`data is not a string or buffer (${typeof data})`);
       }
       return data.includes("Export complete");
@@ -554,6 +861,7 @@ describe("import/export end to end", () => {
       signIn: {
         allowDuplicateEmails: false,
       },
+      usageMode: "DEFAULT",
     });
 
     const accountsPath = path.join(exportPath, "auth_export", "accounts.json");
@@ -567,7 +875,7 @@ describe("import/export end to end", () => {
       project,
       ["--only", "auth", "--import", exportPath],
       (data: unknown) => {
-        if (typeof data != "string" && !Buffer.isBuffer(data)) {
+        if (typeof data !== "string" && !Buffer.isBuffer(data)) {
           throw new Error(`data is not a string or buffer (${typeof data})`);
         }
         return data.includes(ALL_EMULATORS_STARTED_LOG);

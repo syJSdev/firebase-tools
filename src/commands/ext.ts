@@ -3,7 +3,7 @@ import * as clc from "cli-color";
 
 import { checkMinRequiredVersion } from "../checkMinRequiredVersion";
 import { Command } from "../command";
-import * as getProjectId from "../getProjectId";
+import { needProjectId } from "../projectUtils";
 import { logPrefix } from "../extensions/extensionsHelper";
 import { listExtensions } from "../extensions/listExtensions";
 import { requirePermissions } from "../requirePermissions";
@@ -39,9 +39,9 @@ module.exports = new Command("ext")
     // Print out a list of all extension instances on project, if called with a project.
     try {
       await requirePermissions(options, ["firebaseextensions.instances.list"]);
-      const projectId = getProjectId(options);
+      const projectId = needProjectId(options);
       return listExtensions(projectId);
-    } catch (err) {
+    } catch (err: any) {
       return;
     }
   });

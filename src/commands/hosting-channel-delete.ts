@@ -1,5 +1,6 @@
 import { bold, underline } from "cli-color";
-import marked from "marked";
+// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-var-requires
+const { marked } = require("marked");
 
 import { Command } from "../command";
 import { consoleUrl, logLabeledSuccess, logLabeledWarning } from "../utils";
@@ -7,14 +8,14 @@ import { deleteChannel, normalizeName, getChannel, removeAuthDomain } from "../h
 import { promptOnce } from "../prompt";
 import { requireHostingSite } from "../requireHostingSite";
 import { requirePermissions } from "../requirePermissions";
-import * as getProjectId from "../getProjectId";
-import * as requireConfig from "../requireConfig";
+import { needProjectId } from "../projectUtils";
+import { requireConfig } from "../requireConfig";
 import { logger } from "../logger";
 
 export default new Command("hosting:channel:delete <channelId>")
   .description("delete a Firebase Hosting channel")
+  .withForce()
   .option("--site <siteId>", "site in which the channel exists")
-  .option("-f, --force", "delete without confirmation")
   .before(requireConfig)
   .before(requirePermissions, ["firebasehosting.sites.update"])
   .before(requireHostingSite)
@@ -23,7 +24,7 @@ export default new Command("hosting:channel:delete <channelId>")
       channelId: string,
       options: any // eslint-disable-line @typescript-eslint/no-explicit-any
     ): Promise<void> => {
-      const projectId = getProjectId(options);
+      const projectId = needProjectId(options);
       const siteId = options.site;
 
       channelId = normalizeName(channelId);
@@ -49,7 +50,7 @@ export default new Command("hosting:channel:delete <channelId>")
       if (channel) {
         try {
           await removeAuthDomain(projectId, channel.url);
-        } catch (e) {
+        } catch (e: any) {
           logLabeledWarning(
             "hosting:channel",
             marked(

@@ -1,10 +1,11 @@
 import { expect } from "chai";
-import * as _ from "lodash";
 import * as nock from "nock";
 
-import * as cloudscheduler from "../../gcp/cloudscheduler";
 import { FirebaseError } from "../../error";
 import * as api from "../../api";
+import * as backend from "../../deploy/functions/backend";
+import * as cloudscheduler from "../../gcp/cloudscheduler";
+import { cloneDeep } from "../../utils";
 
 const VERSION = "v1beta1";
 
@@ -40,7 +41,7 @@ describe("cloudscheduler", () => {
     });
 
     it("should do nothing if a functionally identical job exists", async () => {
-      const otherJob = _.cloneDeep(TEST_JOB);
+      const otherJob = cloneDeep(TEST_JOB);
       otherJob.name = "something-different";
       nock(api.cloudschedulerOrigin).get(`/${VERSION}/${TEST_JOB.name}`).reply(200, otherJob);
 
@@ -51,7 +52,7 @@ describe("cloudscheduler", () => {
     });
 
     it("should update if a job exists with the same name and a different schedule", async () => {
-      const otherJob = _.cloneDeep(TEST_JOB);
+      const otherJob = cloneDeep(TEST_JOB);
       otherJob.schedule = "every 6 minutes";
       nock(api.cloudschedulerOrigin).get(`/${VERSION}/${TEST_JOB.name}`).reply(200, otherJob);
       nock(api.cloudschedulerOrigin).patch(`/${VERSION}/${TEST_JOB.name}`).reply(200, otherJob);
@@ -63,7 +64,7 @@ describe("cloudscheduler", () => {
     });
 
     it("should update if a job exists with the same name but a different timeZone", async () => {
-      const otherJob = _.cloneDeep(TEST_JOB);
+      const otherJob = cloneDeep(TEST_JOB);
       otherJob.timeZone = "America/New_York";
       nock(api.cloudschedulerOrigin).get(`/${VERSION}/${TEST_JOB.name}`).reply(200, otherJob);
       nock(api.cloudschedulerOrigin).patch(`/${VERSION}/${TEST_JOB.name}`).reply(200, otherJob);
@@ -75,7 +76,7 @@ describe("cloudscheduler", () => {
     });
 
     it("should update if a job exists with the same name but a different retry config", async () => {
-      const otherJob = _.cloneDeep(TEST_JOB);
+      const otherJob = cloneDeep(TEST_JOB);
       otherJob.retryConfig = { maxDoublings: 10 };
       nock(api.cloudschedulerOrigin).get(`/${VERSION}/${TEST_JOB.name}`).reply(200, otherJob);
       nock(api.cloudschedulerOrigin).patch(`/${VERSION}/${TEST_JOB.name}`).reply(200, otherJob);
@@ -116,6 +117,69 @@ describe("cloudscheduler", () => {
       );
 
       expect(nock.isDone()).to.be.true;
+    });
+  });
+
+  describe("jobFromEndpoint", () => {
+    const ENDPOINT: backend.Endpoint = {
+      platform: "gcfv1",
+      id: "id",
+      region: "region",
+      project: "project",
+      entryPoint: "id",
+      runtime: "nodejs16",
+      scheduleTrigger: {
+        schedule: "every 1 minutes",
+      },
+    };
+    it("should copy minimal fields", () => {
+      expect(cloudscheduler.jobFromEndpoint(ENDPOINT, "appEngineLocation")).to.deep.equal({
+        name: "projects/project/locations/appEngineLocation/jobs/firebase-schedule-id-region",
+        schedule: "every 1 minutes",
+        pubsubTarget: {
+          topicName: "projects/project/topics/firebase-schedule-id-region",
+          attributes: {
+            scheduled: "true",
+          },
+        },
+      });
+    });
+
+    it("should copy optional fields", () => {
+      expect(
+        cloudscheduler.jobFromEndpoint(
+          {
+            ...ENDPOINT,
+            scheduleTrigger: {
+              schedule: "every 1 minutes",
+              timeZone: "America/Los_Angeles",
+              retryConfig: {
+                maxDoublings: 2,
+                maxBackoffDuration: "20s",
+                minBackoffDuration: "1s",
+                maxRetryDuration: "60s",
+              },
+            },
+          },
+          "appEngineLocation"
+        )
+      ).to.deep.equal({
+        name: "projects/project/locations/appEngineLocation/jobs/firebase-schedule-id-region",
+        schedule: "every 1 minutes",
+        timeZone: "America/Los_Angeles",
+        retryConfig: {
+          maxDoublings: 2,
+          maxBackoffDuration: "20s",
+          minBackoffDuration: "1s",
+          maxRetryDuration: "60s",
+        },
+        pubsubTarget: {
+          topicName: "projects/project/topics/firebase-schedule-id-region",
+          attributes: {
+            scheduled: "true",
+          },
+        },
+      });
     });
   });
 });

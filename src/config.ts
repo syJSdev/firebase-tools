@@ -2,28 +2,31 @@
 
 import { FirebaseConfig } from "./firebaseConfig";
 
-const _ = require("lodash");
-const clc = require("cli-color");
+import * as _ from "lodash";
+import * as clc from "cli-color";
+import * as fs from "fs-extra";
+import * as path from "path";
 const cjson = require("cjson");
-const fs = require("fs-extra");
-const path = require("path");
 
-const detectProjectRoot = require("./detectProjectRoot").detectProjectRoot;
-const { FirebaseError } = require("./error");
-const fsutils = require("./fsutils");
+import { detectProjectRoot } from "./detectProjectRoot";
+import { FirebaseError } from "./error";
+import * as fsutils from "./fsutils";
+import { promptOnce } from "./prompt";
+import { resolveProjectPath } from "./projectPath";
+import * as utils from "./utils";
+import { getValidator, getErrorMessage } from "./firebaseConfigValidate";
+import { logger } from "./logger";
 const loadCJSON = require("./loadCJSON");
 const parseBoltRules = require("./parseBoltRules");
-const { promptOnce } = require("./prompt");
-const { resolveProjectPath } = require("./projectPath");
-const utils = require("./utils");
-
-type PlainObject = Record<string, unknown>;
 
 export class Config {
+  static DEFAULT_FUNCTIONS_SOURCE = "functions";
+
   static FILENAME = "firebase.json";
-  static MATERIALIZE_TARGETS = [
+  static MATERIALIZE_TARGETS: Array<keyof FirebaseConfig> = [
     "database",
     "emulators",
+    "extensions",
     "firestore",
     "functions",
     "hosting",
@@ -39,9 +42,13 @@ export class Config {
 
   private _src: any;
 
-  constructor(src: any, options: any) {
-    this.options = options || {};
-    this.projectDir = options.projectDir || detectProjectRoot(options);
+  /**
+   * @param src incoming firebase.json source, parsed by not validated.
+   * @param options command-line options.
+   */
+  constructor(src: any, options: any = {}) {
+    this.options = options;
+    this.projectDir = this.options.projectDir || detectProjectRoot(this.options);
     this._src = src;
 
     if (this._src.firebase) {
@@ -54,52 +61,47 @@ export class Config {
       );
     }
 
+    // Move the deprecated top-level "rules" ket into the "database" object
     if (_.has(this._src, "rules")) {
       _.set(this._src, "database.rules", this._src.rules);
     }
 
+    // If a top-level key contains a string path pointing to a suported file
+    // type (JSON or Bolt), we read the file.
+    //
+    // TODO: This is janky and confusing behavior, we should remove it ASAP.
     Config.MATERIALIZE_TARGETS.forEach((target) => {
       if (_.get(this._src, target)) {
-        _.set(this.data, target, this._materialize(target));
+        _.set(this.data, target, this.materialize(target));
       }
     });
 
-    // auto-detect functions from package.json in directory
-    if (
-      this.projectDir &&
-      !this.get("functions.source") &&
-      fsutils.fileExistsSync(this.path("functions/package.json"))
-    ) {
-      this.set("functions.source", "functions");
-    }
-  }
-
-  _hasDeepKey(obj: PlainObject, key: string) {
-    if (_.has(obj, key)) {
-      return true;
-    }
-
-    for (const k in obj) {
-      if (obj.hasOwnProperty(k)) {
-        if (_.isPlainObject(obj[k]) && this._hasDeepKey(obj[k] as PlainObject, key)) {
-          return true;
+    // Inject default functions config and source if missing.
+    if (this.projectDir && fsutils.dirExistsSync(this.path(Config.DEFAULT_FUNCTIONS_SOURCE))) {
+      if (Array.isArray(this.get("functions"))) {
+        if (!this.get("functions.[0].source")) {
+          this.set("functions.[0].source", Config.DEFAULT_FUNCTIONS_SOURCE);
+        }
+      } else {
+        if (!this.get("functions.source")) {
+          this.set("functions.source", Config.DEFAULT_FUNCTIONS_SOURCE);
         }
       }
     }
-    return false;
   }
 
-  _materialize(target: string) {
+  materialize(target: string) {
     const val = _.get(this._src, target);
-    if (_.isString(val)) {
-      let out = this._parseFile(target, val);
+    if (typeof val === "string") {
+      let out = this.parseFile(target, val);
       // if e.g. rules.json has {"rules": {}} use that
-      const lastSegment = _.last(target.split("."));
-      if (_.size(out) === 1 && _.has(out, lastSegment)) {
+      const segments = target.split(".");
+      const lastSegment = segments[segments.length - 1];
+      if (Object.keys(out).length === 1 && _.has(out, lastSegment)) {
         out = out[lastSegment];
       }
       return out;
-    } else if (_.isPlainObject(val) || _.isArray(val)) {
+    } else if (val !== null && typeof val === "object") {
       return val;
     }
 
@@ -108,7 +110,7 @@ export class Config {
     });
   }
 
-  _parseFile(target: string, filePath: string) {
+  parseFile(target: string, filePath: string) {
     const fullPath = resolveProjectPath(this.options, filePath);
     const ext = path.extname(filePath);
     if (!fsutils.fileExistsSync(fullPath)) {
@@ -125,7 +127,7 @@ export class Config {
           this.notes.databaseRulesFile = filePath;
           try {
             return fs.readFileSync(fullPath, "utf8");
-          } catch (e) {
+          } catch (e: any) {
             if (e.code === "ENOENT") {
               throw new FirebaseError(`File not found: ${fullPath}`, { original: e });
             }
@@ -158,6 +160,10 @@ export class Config {
   }
 
   set(key: string, value: any) {
+    // TODO: We should really remove all instances of config.set() around the
+    //       codebase but until we do we need this to prevent src from going stale.
+    _.set(this._src, key, value);
+
     return _.set(this.data, key, value);
   }
 
@@ -167,7 +173,7 @@ export class Config {
 
   path(pathName: string) {
     const outPath = path.normalize(path.join(this.projectDir, pathName));
-    if (_.includes(path.relative(this.projectDir, outPath), "..")) {
+    if (path.relative(this.projectDir, outPath).includes("..")) {
       throw new FirebaseError(clc.bold(pathName) + " is outside of project directory", { exit: 1 });
     }
     return outPath;
@@ -181,7 +187,7 @@ export class Config {
         return JSON.parse(content);
       }
       return content;
-    } catch (e) {
+    } catch (e: any) {
       if (options.fallback) {
         return options.fallback;
       }
@@ -201,10 +207,18 @@ export class Config {
     fs.writeFileSync(this.path(p), content, "utf8");
   }
 
-  askWriteProjectFile(p: string, content: any) {
+  projectFileExists(p: string): boolean {
+    return fs.existsSync(this.path(p));
+  }
+
+  deleteProjectFile(p: string) {
+    fs.removeSync(this.path(p));
+  }
+
+  askWriteProjectFile(p: string, content: any, force?: boolean) {
     const writeTo = this.path(p);
     let next;
-    if (fsutils.fileExistsSync(writeTo)) {
+    if (fsutils.fileExistsSync(writeTo) && !force) {
       next = promptOnce({
         type: "confirm",
         message: "File " + clc.underline(p) + " already exists. Overwrite?",
@@ -231,8 +245,22 @@ export class Config {
       try {
         const filePath = path.resolve(pd, path.basename(filename));
         const data = cjson.load(filePath);
+
+        // Validate config against JSON Schema. For now we just print these to debug
+        // logs but in a future CLI version they could be warnings and/or errors.
+        const validator = getValidator();
+        const valid = validator(data);
+        if (!valid && validator.errors) {
+          for (const e of validator.errors) {
+            // TODO: We should probably collapse these errors on the 'dataPath' property
+            //       and then pick out the most important error on each field. Otherwise
+            //       some simple mistakes can cause 2-3 errors.
+            logger.debug(getErrorMessage(e));
+          }
+        }
+
         return new Config(data, options);
-      } catch (e) {
+      } catch (e: any) {
         throw new FirebaseError(`There was an error loading ${filename}:\n\n` + e.message, {
           exit: 1,
         });

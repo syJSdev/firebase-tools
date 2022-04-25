@@ -1,30 +1,90 @@
-import * as clc from "cli-color";
 import * as path from "path";
+import * as clc from "cli-color";
 
 import { FirebaseError } from "../../error";
+import { getSecretVersion, SecretVersion } from "../../gcp/secretManager";
 import { logger } from "../../logger";
-import { RUNTIME_NOT_SET } from "./parseRuntimeAndValidateSDK";
-import { getFunctionLabel } from "./functionsDeployHelper";
-import * as backend from "./backend";
 import * as fsutils from "../../fsutils";
-import * as projectPath from "../../projectPath";
+import * as backend from "./backend";
+import * as utils from "../../utils";
+import * as secrets from "../../functions/secrets";
+import { serviceForEndpoint } from "./services";
 
-// have to require this because no @types/cjson available
-// tslint:disable-next-line
-const cjson = require("cjson");
+/** Validate that the configuration for endpoints are valid. */
+export function endpointsAreValid(wantBackend: backend.Backend): void {
+  const endpoints = backend.allEndpoints(wantBackend);
+  functionIdsAreValid(endpoints);
+  for (const ep of endpoints) {
+    serviceForEndpoint(ep).validateTrigger(ep, wantBackend);
+  }
+
+  // Our SDK doesn't let people articulate this, but it's theoretically possible in the manifest syntax.
+  const gcfV1WithConcurrency = endpoints
+    .filter((endpoint) => (endpoint.concurrency || 1) !== 1 && endpoint.platform === "gcfv1")
+    .map((endpoint) => endpoint.id);
+  if (gcfV1WithConcurrency.length) {
+    const msg = `Cannot set concurrency on the functions ${gcfV1WithConcurrency.join(
+      ","
+    )} because they are GCF gen 1`;
+    throw new FirebaseError(msg);
+  }
+
+  const tooSmallForConcurrency = endpoints
+    .filter((endpoint) => {
+      if ((endpoint.concurrency || 1) === 1) {
+        return false;
+      }
+      const mem = endpoint.availableMemoryMb || backend.DEFAULT_MEMORY;
+      return mem < backend.MIN_MEMORY_FOR_CONCURRENCY;
+    })
+    .map((endpoint) => endpoint.id);
+  if (tooSmallForConcurrency.length) {
+    const msg = `Cannot set concurency on the functions ${tooSmallForConcurrency.join(
+      ","
+    )} because they have fewer than 2GB memory`;
+    throw new FirebaseError(msg);
+  }
+}
+
+/** Validate that all endpoints in the given set of backends are unique */
+export function endpointsAreUnique(backends: Record<string, backend.Backend>): void {
+  const endpointToCodebases: Record<string, Set<string>> = {}; // function name -> codebases
+
+  for (const [codebase, b] of Object.entries(backends)) {
+    for (const endpoint of backend.allEndpoints(b)) {
+      const key = backend.functionName(endpoint);
+      const cs = endpointToCodebases[key] || new Set();
+      cs.add(codebase);
+      endpointToCodebases[key] = cs;
+    }
+  }
+
+  const conflicts: Record<string, string[]> = {};
+  for (const [fn, codebases] of Object.entries(endpointToCodebases)) {
+    if (codebases.size > 1) {
+      conflicts[fn] = Array.from(codebases);
+    }
+  }
+
+  if (Object.keys(conflicts).length === 0) {
+    return;
+  }
+
+  const msgs = Object.entries(conflicts).map(([fn, codebases]) => `${fn}: ${codebases.join(",")}`);
+  throw new FirebaseError(
+    "More than one codebase claims following functions:\n\t" + `${msgs.join("\n\t")}`
+  );
+}
 
 /**
  * Check that functions directory exists.
- * @param options options object. In prod is an Options; in tests can just be {cwd: string}
- * @param sourceDirName Relative path to source directory.
+ * @param sourceDir Absolute path to source directory.
+ * @param projectDir Absolute path to project directory.
  * @throws { FirebaseError } Functions directory must exist.
  */
-export function functionsDirectoryExists(
-  options: { cwd: string; configPath?: string },
-  sourceDirName: string
-): void {
-  // Note(inlined): What's the difference between this and options.config.path(sourceDirName)?
-  if (!fsutils.dirExistsSync(projectPath.resolveProjectPath(options, sourceDirName))) {
+export function functionsDirectoryExists(sourceDir: string, projectDir: string): void {
+  if (!fsutils.dirExistsSync(sourceDir)) {
+    const sourceDirName = path.relative(projectDir, sourceDir);
     const msg =
       `could not deploy functions because the ${clc.bold('"' + sourceDirName + '"')} ` +
       `directory was not found. Please create it or specify a different source directory in firebase.json`;
@@ -34,115 +94,114 @@ export function functionsDirectoryExists(
 
 /**
  * Validate function names only contain letters, numbers, underscores, and hyphens
- * and not exceed 62 characters in length.
+ * and not exceed 63 characters in length.
  * @param functionNames Object containing function names as keys.
  * @throws { FirebaseError } Function names must be valid.
  */
-export function functionIdsAreValid(functions: { id: string }[]): void {
-  const validFunctionNameRegex = /^[a-zA-Z0-9_-]{1,62}$/;
-  const invalidIds = functions.filter((fn) => !validFunctionNameRegex.test(fn.id));
-  if (invalidIds.length !== 0) {
+export function functionIdsAreValid(functions: { id: string; platform: string }[]): void {
+  const v1FunctionName = /^[a-zA-Z][a-zA-Z0-9_-]{0,62}$/;
+  const invalidV1Ids = functions.filter((fn) => {
+    return fn.platform === "gcfv1" && !v1FunctionName.test(fn.id);
+  });
+  if (invalidV1Ids.length !== 0) {
     const msg =
-      `${invalidIds.join(", ")} function name(s) can only contain letters, ` +
+      `${invalidV1Ids.map((f) => f.id).join(", ")} function name(s) can only contain letters, ` +
       `numbers, hyphens, and not exceed 62 characters in length`;
     throw new FirebaseError(msg);
   }
-}
 
-/**
- * Validate contents of package.json to ensure main file is present.
- * @param sourceDirName Name of source directory.
- * @param sourceDir Relative path of source directory.
- * @param projectDir Relative path of project directory.
- * @param hasRuntimeConfigInConfig Whether the runtime was chosen in the `functions` section of firebase.json.
- * @throws { FirebaseError } Package.json must be present and valid.
- */
-export function packageJsonIsValid(
-  sourceDirName: string,
-  sourceDir: string,
-  projectDir: string,
-  hasRuntimeConfigInConfig: boolean
-): void {
-  const packageJsonFile = path.join(sourceDir, "package.json");
-  if (!fsutils.fileExistsSync(packageJsonFile)) {
-    const msg = `No npm package found in functions source directory. Please run 'npm init' inside ${sourceDirName}`;
-    throw new FirebaseError(msg);
-  }
-
-  let data;
-  try {
-    data = cjson.load(packageJsonFile);
-    logger.debug("> [functions] package.json contents:", JSON.stringify(data, null, 2));
-    assertFunctionsSourcePresent(data, sourceDir, projectDir);
-  } catch (e) {
-    const msg = `There was an error reading ${sourceDirName}${path.sep}package.json:\n\n ${e.message}`;
-    throw new FirebaseError(msg);
-  }
-
-  if (!hasRuntimeConfigInConfig) {
-    assertEnginesFieldPresent(data);
-  }
-}
-
-export function checkForInvalidChangeOfTrigger(
-  fn: backend.FunctionSpec,
-  exFn: backend.FunctionSpec
-) {
-  const wantEventTrigger = backend.isEventTrigger(fn.trigger);
-  const haveEventTrigger = backend.isEventTrigger(exFn.trigger);
-  if (!wantEventTrigger && haveEventTrigger) {
-    throw new FirebaseError(
-      `[${getFunctionLabel(
-        fn
-      )}] Changing from a background triggered function to an HTTPS function is not allowed. Please delete your function and create a new one instead.`
-    );
-  }
-  if (wantEventTrigger && !haveEventTrigger) {
-    throw new FirebaseError(
-      `[${getFunctionLabel(
-        fn
-      )}] Changing from an HTTPS function to an background triggered function is not allowed. Please delete your function and create a new one instead.`
-    );
-  }
-  if (fn.apiVersion == 2 && exFn.apiVersion == 1) {
-    throw new FirebaseError(
-      `[${getFunctionLabel(
-        fn
-      )}] Upgrading from GCFv1 to GCFv2 is not yet supported. Please delete your old function or wait for this feature to be ready.`
-    );
-  }
-  if (fn.apiVersion == 1 && exFn.apiVersion == 2) {
-    throw new FirebaseError(
-      `[${getFunctionLabel(fn)}] Functions cannot be downgraded from GCFv2 to GCFv1`
-    );
-  }
-}
-
-/**
- * Asserts that functions source directory exists and source file is present.
- * @param data Object representing package.json file.
- * @param sourceDir Directory for the functions source.
- * @param projectDir Project directory.
- * @throws { FirebaseError } Functions source directory and source file must exist.
- */
-function assertFunctionsSourcePresent(data: any, sourceDir: string, projectDir: string): void {
-  const indexJsFile = path.join(sourceDir, data.main || "index.js");
-  if (!fsutils.fileExistsSync(indexJsFile)) {
-    const msg = `${path.relative(
-      projectDir,
-      indexJsFile
-    )} does not exist, can't deploy Cloud Functions`;
+  const v2FunctionName = /^[a-z][a-z0-9-]{0,62}$/;
+  const invalidV2Ids = functions.filter((fn) => {
+    return fn.platform === "gcfv2" && !v2FunctionName.test(fn.id);
+  });
+  if (invalidV2Ids.length !== 0) {
+    const msg =
+      `${invalidV2Ids.map((f) => f.id).join(", ")} v2 function name(s) can only contin lower ` +
+      `case letters, numbers, hyphens, and not exceed 62 characters in length`;
     throw new FirebaseError(msg);
   }
 }
 
 /**
- * Asserts the engines field is present in package.json.
- * @param data Object representing package.json file.
- * @throws { FirebaseError } Engines field must be present in package.json.
+ * Validate secret environment variables setting, if any.
+ * A bad secret configuration can lead to a significant delay in function deploys.
+ *
+ * If validation fails for any secret config, throws a FirebaseError.
  */
-function assertEnginesFieldPresent(data: any): void {
-  if (!data.engines || !data.engines.node) {
-    throw new FirebaseError(RUNTIME_NOT_SET);
+export async function secretsAreValid(projectId: string, wantBackend: backend.Backend) {
+  const endpoints = backend
+    .allEndpoints(wantBackend)
+    .filter((e) => e.secretEnvironmentVariables && e.secretEnvironmentVariables.length > 0);
+  validatePlatformTargets(endpoints);
+  await validateSecretVersions(projectId, endpoints);
+}
+
+/**
+ * Ensures that all endpoints specifying secret environment variables target platform that supports the feature.
+ */
+function validatePlatformTargets(endpoints: backend.Endpoint[]) {
+  const supportedPlatforms = ["gcfv1"];
+  const unsupported = endpoints.filter((e) => !supportedPlatforms.includes(e.platform));
+  if (unsupported.length > 0) {
+    const errs = unsupported.map((e) => `${e.id}[platform=${e.platform}]`);
+    throw new FirebaseError(
+      `Tried to set secret environment variables on ${errs.join(", ")}. ` +
+        `Only ${supportedPlatforms.join(", ")} support secret environments.`
+    );
+  }
+}
+
+/**
+ * Validate each secret version referenced in target endpoints.
+ *
+ * A secret version is valid if:
+ *   1) It exists.
+ *   2) It's in state "enabled".
+ */
+async function validateSecretVersions(projectId: string, endpoints: backend.Endpoint[]) {
+  const toResolve: Set<string> = new Set();
+  for (const s of secrets.of(endpoints)) {
+    toResolve.add(s.secret);
+  }
+
+  const results = await utils.allSettled(
+    Array.from(toResolve).map(async (secret): Promise<SecretVersion> => {
+      // We resolve the secret to its latest version - we do not allow CF3 customers to pin secret versions.
+      const sv = await getSecretVersion(projectId, secret, "latest");
+      logger.debug(`Resolved secret version of ${clc.bold(secret)} to ${clc.bold(sv.versionId)}.`);
+      return sv;
+    })
+  );
+
+  const secretVersions: Record<string, SecretVersion> = {};
+  const errs: FirebaseError[] = [];
+  for (const result of results) {
+    if (result.status === "fulfilled") {
+      const sv = result.value;
+      if (sv.state !== "ENABLED") {
+        errs.push(
+          new FirebaseError(
+            `Expected secret ${sv.secret.name}@${sv.versionId} to be in state ENABLED not ${sv.state}.`
+          )
+        );
+      }
+      secretVersions[sv.secret.name] = sv;
+    } else {
+      errs.push(new FirebaseError((result.reason as { message: string }).message));
+    }
+  }
+
+  if (errs.length) {
+    throw new FirebaseError("Failed to validate secret versions", { children: errs });
+  }
+
+  // Fill in versions.
+  for (const s of secrets.of(endpoints)) {
+    s.version = secretVersions[s.secret].versionId;
+    if (!s.version) {
+      throw new FirebaseError(
+        "Secret version is unexpectedly undefined. This should never happen."
+      );
+    }
   }
 }

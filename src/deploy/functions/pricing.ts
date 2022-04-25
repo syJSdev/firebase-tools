@@ -117,34 +117,38 @@ export const V2_FREE_TIER = {
 
 // In v1, CPU is automatically fixed to the memory size determines the CPU size.
 // Table at https://cloud.google.com/functions/pricing#compute_time
+const VCPU_TO_GHZ = 2.4;
 const MB_TO_GHZ = {
   128: 0.2,
   256: 0.4,
   512: 0.8,
   1024: 1.4,
-  2048: 2.4,
-  4096: 4.8,
-  8192: 4.8,
+  2048: 1 * VCPU_TO_GHZ,
+  4096: 2 * VCPU_TO_GHZ,
+  8192: 2 * VCPU_TO_GHZ,
+  16384: 4 * VCPU_TO_GHZ,
+  32768: 8 * VCPU_TO_GHZ,
 };
 
-export function canCalculateMinInstanceCost(functionSpec: backend.FunctionSpec): boolean {
-  if (!functionSpec.minInstances) {
+/** Whether we have information in our price sheet to calculate the minInstance cost. */
+export function canCalculateMinInstanceCost(endpoint: backend.Endpoint): boolean {
+  if (!endpoint.minInstances) {
     return true;
   }
 
-  if (functionSpec.apiVersion == 1) {
-    if (!MB_TO_GHZ[functionSpec.availableMemoryMb || 256]) {
+  if (endpoint.platform === "gcfv1") {
+    if (!MB_TO_GHZ[endpoint.availableMemoryMb || 256]) {
       return false;
     }
 
-    if (!V1_REGION_TO_TIER[functionSpec.region]) {
+    if (!V1_REGION_TO_TIER[endpoint.region]) {
       return false;
     }
 
     return true;
   }
 
-  if (!V2_REGION_TO_TIER[functionSpec.region]) {
+  if (!V2_REGION_TO_TIER[endpoint.region]) {
     return false;
   }
 
@@ -154,57 +158,63 @@ export function canCalculateMinInstanceCost(functionSpec: backend.FunctionSpec):
 // A hypothetical month has 30d. ALWAYS PRINT THIS ASSUMPTION when printing
 // a cost estimate.
 const SECONDS_PER_MONTH = 30 * 24 * 60 * 60;
-export function monthlyMinInstanceCost(functions: backend.FunctionSpec[]): number {
+
+/** The cost of a series of endpoints at 100% idle in a 30d month. */
+export function monthlyMinInstanceCost(endpoints: backend.Endpoint[]): number {
   // Assertion: canCalculateMinInstanceCost
   type Usage = {
     ram: number;
     cpu: number;
   };
-  const usage: Record<backend.FunctionsApiVersion, Record<tier, Usage>> = {
-    1: { 1: { ram: 0, cpu: 0 }, 2: { ram: 0, cpu: 0 } },
-    2: { 1: { ram: 0, cpu: 0 }, 2: { ram: 0, cpu: 0 } },
+  const usage: Record<backend.FunctionsPlatform, Record<tier, Usage>> = {
+    gcfv1: { 1: { ram: 0, cpu: 0 }, 2: { ram: 0, cpu: 0 } },
+    gcfv2: { 1: { ram: 0, cpu: 0 }, 2: { ram: 0, cpu: 0 } },
   };
 
-  for (const func of functions) {
-    if (!func.minInstances) {
+  for (const endpoint of endpoints) {
+    if (!endpoint.minInstances) {
       continue;
     }
 
-    const ramMb = func.availableMemoryMb || 256;
+    const ramMb = endpoint.availableMemoryMb || 256;
     const ramGb = ramMb / 1024;
-    if (func.apiVersion === 1) {
+    if (endpoint.platform === "gcfv1") {
       const cpu = MB_TO_GHZ[ramMb];
-      const tier = V1_REGION_TO_TIER[func.region];
-      usage[1][tier].ram = usage[1][tier].ram + ramGb * SECONDS_PER_MONTH * func.minInstances;
-      usage[1][tier].cpu =
-        usage[1][tier].cpu + MB_TO_GHZ[ramMb] * SECONDS_PER_MONTH * func.minInstances;
+      const tier = V1_REGION_TO_TIER[endpoint.region];
+      usage["gcfv1"][tier].ram =
+        usage["gcfv1"][tier].ram + ramGb * SECONDS_PER_MONTH * endpoint.minInstances;
+      usage["gcfv1"][tier].cpu =
+        usage["gcfv1"][tier].cpu + cpu * SECONDS_PER_MONTH * endpoint.minInstances;
     } else {
       // V2 is currently fixed at 1vCPU.
       const cpu = 1;
-      const tier = V2_REGION_TO_TIER[func.region];
-      usage[2][tier].ram = usage[2][tier].ram + ramGb * SECONDS_PER_MONTH * func.minInstances;
-      usage[2][tier].cpu = usage[2][tier].cpu + cpu * SECONDS_PER_MONTH * func.minInstances;
+      const tier = V2_REGION_TO_TIER[endpoint.region];
+      usage["gcfv2"][tier].ram =
+        usage["gcfv2"][tier].ram + ramGb * SECONDS_PER_MONTH * endpoint.minInstances;
+      usage["gcfv2"][tier].cpu =
+        usage["gcfv2"][tier].cpu + cpu * SECONDS_PER_MONTH * endpoint.minInstances;
     }
   }
 
   // The free tier doesn't work like "your first $5 are free". Instead it's a per-resource quota
   // that is given free _at the equivalent price of a tier-1 region_.
   let v1MemoryBill =
-    usage[1][1].ram * V1_RATES.memoryGb[1] + usage[1][2].ram * V1_RATES.memoryGb[2];
+    usage["gcfv1"][1].ram * V1_RATES.memoryGb[1] + usage["gcfv1"][2].ram * V1_RATES.memoryGb[2];
   v1MemoryBill -= V1_FREE_TIER.memoryGb * V1_RATES.memoryGb[1];
   v1MemoryBill = Math.max(v1MemoryBill, 0);
 
   let v1CpuBill =
-    usage[1][1].cpu * V1_RATES.idleCpuGhz[1] + usage[1][2].cpu * V1_RATES.idleCpuGhz[2];
+    usage["gcfv1"][1].cpu * V1_RATES.idleCpuGhz[1] + usage["gcfv1"][2].cpu * V1_RATES.idleCpuGhz[2];
   v1CpuBill -= V1_FREE_TIER.cpuGhz * V1_RATES.cpuGhz[1];
   v1CpuBill = Math.max(v1CpuBill, 0);
 
   let v2MemoryBill =
-    usage[2][1].ram * V2_RATES.memoryGb[1] + usage[2][2].ram * V2_RATES.memoryGb[2];
+    usage["gcfv2"][1].ram * V2_RATES.memoryGb[1] + usage["gcfv2"][2].ram * V2_RATES.memoryGb[2];
   v2MemoryBill -= V2_FREE_TIER.memoryGb * V2_RATES.memoryGb[1];
   v2MemoryBill = Math.max(v2MemoryBill, 0);
 
-  let v2CpuBill = usage[2][1].cpu * V2_RATES.idleVCpu[1] + usage[2][2].cpu * V2_RATES.idleVCpu[2];
+  let v2CpuBill =
+    usage["gcfv2"][1].cpu * V2_RATES.idleVCpu[1] + usage["gcfv2"][2].cpu * V2_RATES.idleVCpu[2];
   v2CpuBill -= V2_FREE_TIER.vCpu * V2_RATES.vCpu[1];
   v2CpuBill = Math.max(v2CpuBill, 0);
 

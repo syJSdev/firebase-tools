@@ -5,15 +5,15 @@ import { getSite, deleteSite } from "../hosting/api";
 import { promptOnce } from "../prompt";
 import { FirebaseError } from "../error";
 import { requirePermissions } from "../requirePermissions";
-import * as getProjectId from "../getProjectId";
-import * as requireConfig from "../requireConfig";
+import { needProjectId } from "../projectUtils";
+import { requireConfig } from "../requireConfig";
 import { logger } from "../logger";
 
 const LOG_TAG = "hosting:sites";
 
 export default new Command("hosting:sites:delete <siteId>")
   .description("delete a Firebase Hosting site")
-  .option("-f, --force", "delete without confirmation")
+  .withForce()
   .before(requireConfig)
   .before(requirePermissions, ["firebasehosting.sites.delete"])
   .action(
@@ -21,7 +21,7 @@ export default new Command("hosting:sites:delete <siteId>")
       siteId: string,
       options: any // eslint-disable-line @typescript-eslint/no-explicit-any
     ): Promise<void> => {
-      const projectId = getProjectId(options);
+      const projectId = needProjectId(options);
       if (!siteId) {
         throw new FirebaseError("siteId is required");
       }

@@ -27,55 +27,88 @@ const CACHE_DIR =
 
 export const DownloadDetails: { [s in DownloadableEmulators]: EmulatorDownloadDetails } = {
   database: {
-    downloadPath: path.join(CACHE_DIR, "firebase-database-emulator-v4.7.2.jar"),
-    version: "4.7.2",
+    downloadPath: path.join(CACHE_DIR, "firebase-database-emulator-v4.7.3.jar"),
+    version: "4.7.3",
     opts: {
       cacheDir: CACHE_DIR,
       remoteUrl:
-        "https://storage.googleapis.com/firebase-preview-drop/emulator/firebase-database-emulator-v4.7.2.jar",
-      expectedSize: 28910604,
-      expectedChecksum: "264e5df0c0661c064ef7dc9ce8179aba",
+        "https://storage.googleapis.com/firebase-preview-drop/emulator/firebase-database-emulator-v4.7.3.jar",
+      expectedSize: 28862098,
+      expectedChecksum: "8f696f24ee89c937a789498a0c0e4899",
       namePrefix: "firebase-database-emulator",
     },
   },
   firestore: {
-    downloadPath: path.join(CACHE_DIR, "cloud-firestore-emulator-v1.12.0.jar"),
-    version: "1.12.0",
+    downloadPath: path.join(CACHE_DIR, "cloud-firestore-emulator-v1.14.3.jar"),
+    version: "1.14.3",
     opts: {
       cacheDir: CACHE_DIR,
       remoteUrl:
-        "https://storage.googleapis.com/firebase-preview-drop/emulator/cloud-firestore-emulator-v1.12.0.jar",
-      expectedSize: 60294085,
-      expectedChecksum: "0aa18be685bfe6357302731f05faa38a",
+        "https://storage.googleapis.com/firebase-preview-drop/emulator/cloud-firestore-emulator-v1.14.3.jar",
+      expectedSize: 60442855,
+      expectedChecksum: "63517534875818689639ee5dee57dd52",
       namePrefix: "cloud-firestore-emulator",
     },
   },
   storage: {
-    downloadPath: path.join(CACHE_DIR, "cloud-storage-rules-runtime-v1.0.0.jar"),
-    version: "1.0.0",
+    downloadPath: path.join(CACHE_DIR, "cloud-storage-rules-runtime-v1.0.2.jar"),
+    version: "1.0.2",
     opts: {
       cacheDir: CACHE_DIR,
       remoteUrl:
-        "https://storage.googleapis.com/firebase-preview-drop/emulator/cloud-storage-rules-runtime-v1.0.0.jar",
-      expectedSize: 63857175,
-      expectedChecksum: "fd8577f82d42ee1c03ae9d12b888049c",
+        "https://storage.googleapis.com/firebase-preview-drop/emulator/cloud-storage-rules-runtime-v1.0.2.jar",
+      expectedSize: 35704306,
+      expectedChecksum: "0dd3e17939610fc3dbdf53fb24cfda86",
       namePrefix: "cloud-storage-rules-emulator",
-      skipChecksumAndSize: true,
     },
   },
-  ui: {
-    version: "1.5.0",
-    downloadPath: path.join(CACHE_DIR, "ui-v1.5.0.zip"),
-    unzipDir: path.join(CACHE_DIR, "ui-v1.5.0"),
-    binaryPath: path.join(CACHE_DIR, "ui-v1.5.0", "server.bundle.js"),
-    opts: {
-      cacheDir: CACHE_DIR,
-      remoteUrl: "https://storage.googleapis.com/firebase-preview-drop/emulator/ui-v1.5.0.zip",
-      expectedSize: 6251856,
-      expectedChecksum: "a549701d81f16f133b916886b40320f4",
-      namePrefix: "ui",
-    },
-  },
+  ui: previews.extensionsemulator
+    ? {
+        version: "EXTENSIONS",
+        downloadPath: path.join(CACHE_DIR, "ui-vEXTENSIONS.zip"),
+        unzipDir: path.join(CACHE_DIR, "ui-vEXTENSIONS"),
+        binaryPath: path.join(CACHE_DIR, "ui-vEXTENSIONS", "server.bundle.js"),
+        opts: {
+          cacheDir: CACHE_DIR,
+          remoteUrl:
+            "https://storage.googleapis.com/firebase-preview-drop/emulator/ui-vEXTENSIONS.zip",
+          expectedSize: -1,
+          expectedChecksum: "",
+          skipCache: true,
+          skipChecksumAndSize: true,
+          namePrefix: "ui",
+        },
+      }
+    : previews.emulatoruisnapshot
+    ? {
+        version: "SNAPSHOT",
+        downloadPath: path.join(CACHE_DIR, "ui-vSNAPSHOT.zip"),
+        unzipDir: path.join(CACHE_DIR, "ui-vSNAPSHOT"),
+        binaryPath: path.join(CACHE_DIR, "ui-vSNAPSHOT", "server.bundle.js"),
+        opts: {
+          cacheDir: CACHE_DIR,
+          remoteUrl:
+            "https://storage.googleapis.com/firebase-preview-drop/emulator/ui-vSNAPSHOT.zip",
+          expectedSize: -1,
+          expectedChecksum: "",
+          skipCache: true,
+          skipChecksumAndSize: true,
+          namePrefix: "ui",
+        },
+      }
+    : {
+        version: "1.6.5",
+        downloadPath: path.join(CACHE_DIR, "ui-v1.6.5.zip"),
+        unzipDir: path.join(CACHE_DIR, "ui-v1.6.5"),
+        binaryPath: path.join(CACHE_DIR, "ui-v1.6.5", "server.bundle.js"),
+        opts: {
+          cacheDir: CACHE_DIR,
+          remoteUrl: "https://storage.googleapis.com/firebase-preview-drop/emulator/ui-v1.6.5.zip",
+          expectedSize: 3816994,
+          expectedChecksum: "92dfff4b2ef8ab616e8a60cc93e0a00b",
+          namePrefix: "ui",
+        },
+      },
   pubsub: {
     downloadPath: path.join(CACHE_DIR, "pubsub-emulator-0.1.0.zip"),
     version: "0.1.0",
@@ -154,10 +187,10 @@ const Commands: { [s in DownloadableEmulators]: DownloadableEmulatorCommand } = 
     // separately in ./storage/runtime.ts (not via the start function below).
     binary: "java",
     args: [
-      "-jar",
       // Required for rules error/warning messages, which are in English only.
       // Attempts to fetch the messages in another language leads to crashes.
       "-Duser.language=en",
+      "-jar",
       getExecPath(Emulators.STORAGE),
       "serve",
     ],
@@ -253,21 +286,40 @@ export function _getCommand(
   };
 }
 
-async function _fatal(emulator: DownloadableEmulatorDetails, errorMsg: string): Promise<void> {
+async function _fatal(emulator: Emulators, errorMsg: string): Promise<void> {
   // if we do not issue a stopAll here and _fatal is called during startup, we could leave emulators running
   // that did start already
   // for example: JAVA_HOME=/does/not/exist firebase emulators:start
   try {
-    const logger = EmulatorLogger.forEmulator(emulator.name);
+    const logger = EmulatorLogger.forEmulator(emulator);
     logger.logLabeled(
       "WARN",
-      emulator.name,
+      emulator,
       `Fatal error occurred: \n   ${errorMsg}, \n   stopping all running emulators`
     );
     await EmulatorRegistry.stopAll();
   } finally {
     process.exit(1);
   }
+}
+
+export async function handleEmulatorProcessError(emulator: Emulators, err: any): Promise<void> {
+  const description = Constants.description(emulator);
+  if (err.path === "java" && err.code === "ENOENT") {
+    await _fatal(
+      emulator,
+      `${description} has exited because java is not installed, you can install it from https://openjdk.java.net/install/`
+    );
+  } else {
+    await _fatal(emulator, `${description} has exited: ${err}`);
+  }
+}
+
+export function requiresJava(emulator: Emulators): boolean {
+  if (emulator in Commands) {
+    return Commands[emulator as keyof typeof Commands].binary === "java";
+  }
+  return false;
 }
 
 async function _runBinary(
@@ -288,7 +340,7 @@ async function _runBinary(
         detached: true,
         stdio: ["inherit", "pipe", "pipe"],
       });
-    } catch (e) {
+    } catch (e: any) {
       if (e.code === "EACCES") {
         // Known issue when WSL users don't have java
         // https://github.com/Microsoft/WSL/issues/3886
@@ -298,7 +350,7 @@ async function _runBinary(
           `Could not spawn child process for emulator, check that java is installed and on your $PATH.`
         );
       }
-      _fatal(emulator, e);
+      _fatal(emulator.name, e);
     }
 
     const description = Constants.description(emulator.name);
@@ -314,11 +366,11 @@ async function _runBinary(
       `${description} logging to ${clc.bold(getLogFileName(emulator.name))}`
     );
 
-    emulator.instance.stdout.on("data", (data) => {
+    emulator.instance.stdout?.on("data", (data) => {
       logger.log("DEBUG", data.toString());
       emulator.stdout.write(data);
     });
-    emulator.instance.stderr.on("data", (data) => {
+    emulator.instance.stderr?.on("data", (data) => {
       logger.log("DEBUG", data.toString());
       emulator.stdout.write(data);
 
@@ -331,21 +383,15 @@ async function _runBinary(
       }
     });
 
-    emulator.instance.on("error", async (err: any) => {
-      if (err.path === "java" && err.code === "ENOENT") {
-        await _fatal(
-          emulator,
-          `${description} has exited because java is not installed, you can install it from https://openjdk.java.net/install/`
-        );
-      } else {
-        await _fatal(emulator, `${description} has exited: ${err}`);
-      }
+    emulator.instance.on("error", (err) => {
+      handleEmulatorProcessError(emulator.name, err);
     });
+
     emulator.instance.once("exit", async (code, signal) => {
       if (signal) {
         utils.logWarning(`${description} has exited upon receiving signal: ${signal}`);
       } else if (code && code !== 0 && code !== /* SIGINT */ 130) {
-        await _fatal(emulator, `${description} has exited with code: ${code}`);
+        await _fatal(emulator.name, `${description} has exited with code: ${code}`);
       }
     });
     resolve();

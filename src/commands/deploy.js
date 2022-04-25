@@ -5,15 +5,22 @@ const { requireDatabaseInstance } = require("../requireDatabaseInstance");
 const { requirePermissions } = require("../requirePermissions");
 const { checkServiceAccountIam } = require("../deploy/functions/checkIam");
 const checkValidTargetFilters = require("../checkValidTargetFilters");
-const checkFunctionsSDKVersion = require("../checkFirebaseSDKVersion").checkFunctionsSDKVersion;
 const { Command } = require("../command");
-const deploy = require("../deploy");
-const requireConfig = require("../requireConfig");
-const filterTargets = require("../filterTargets");
+const { deploy } = require("../deploy");
+const { requireConfig } = require("../requireConfig");
+const { filterTargets } = require("../filterTargets");
 const { requireHostingSite } = require("../requireHostingSite");
 
 // in order of least time-consuming to most time-consuming
-const VALID_TARGETS = ["database", "storage", "firestore", "functions", "hosting", "remoteconfig"];
+const VALID_TARGETS = [
+  "database",
+  "storage",
+  "firestore",
+  "functions",
+  "hosting",
+  "remoteconfig",
+  "extensions",
+];
 const TARGET_PERMISSIONS = {
   database: ["firebasedatabase.instances.update"],
   hosting: ["firebasehosting.sites.update"],
@@ -41,12 +48,11 @@ const TARGET_PERMISSIONS = {
 
 module.exports = new Command("deploy")
   .description("deploy code and assets to your Firebase project")
-  .option("-p, --public <path>", "override the Hosting public directory specified in firebase.json")
-  .option("-m, --message <message>", "an optional message describing this deploy")
-  .option(
-    "-f, --force",
+  .withForce(
     "delete Cloud Functions missing from the current working directory without confirmation"
   )
+  .option("-p, --public <path>", "override the Hosting public directory specified in firebase.json")
+  .option("-m, --message <message>", "an optional message describing this deploy")
   .option(
     "--only <targets>",
     'only deploy to specified, comma-separated targets (e.g. "hosting,storage"). For functions, ' +
@@ -79,7 +85,6 @@ module.exports = new Command("deploy")
     }
   })
   .before(checkValidTargetFilters)
-  .before(checkFunctionsSDKVersion)
   .action(function (options) {
     return deploy(options.filteredTargets, options);
   });

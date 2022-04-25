@@ -17,7 +17,7 @@ import {
 import { addServiceAccountToRoles, firebaseRoles } from "../../../gcp/resourceManager";
 import { logger } from "../../../logger";
 import { prompt } from "../../../prompt";
-import { logBullet, logLabeledBullet, logSuccess, reject } from "../../../utils";
+import { logBullet, logLabeledBullet, logSuccess, logWarning, reject } from "../../../utils";
 import { githubApiOrigin, githubClientId } from "../../../api";
 import { Client } from "../../../apiv2";
 
@@ -52,6 +52,12 @@ const githubApiClient = new Client({ urlPrefix: githubApiOrigin, auth: false });
 export async function initGitHub(setup: Setup, config: any, options: any): Promise<void> {
   if (!setup.projectId) {
     return reject("Could not determine Project ID, can't set up GitHub workflow.", { exit: 1 });
+  }
+
+  if (!setup.config.hosting) {
+    return reject(
+      `Didn't find a Hosting config in firebase.json. Run ${bold("firebase init hosting")} instead.`
+    );
   }
 
   logger.info();
@@ -103,7 +109,7 @@ export async function initGitHub(setup: Setup, config: any, options: any): Promi
     `Created service account ${bold(serviceAccountName)} with Firebase Hosting admin permissions.`
   );
 
-  const spinnerSecrets = ora.default(`Uploading service account secrets to repository: ${repo}`);
+  const spinnerSecrets = ora(`Uploading service account secrets to repository: ${repo}`);
   spinnerSecrets.start();
 
   const encryptedServiceAccountJSON = encryptServiceAccountJSON(serviceAccountJSON, key);
@@ -401,16 +407,39 @@ async function promptForRepo(
       message:
         "For which GitHub repository would you like to set up a GitHub workflow? (format: user/repository)",
       validate: async (repo: string) => {
-        // eslint-disable-next-line camelcase
-        const { body } = await githubApiClient.get<{ key: string; key_id: string }>(
-          `/repos/${repo}/actions/secrets/public-key`,
-          {
-            headers: { Authorization: `token ${ghAccessToken}`, "User-Agent": "Firebase CLI" },
-            queryParams: { type: "owner" },
+        try {
+          // eslint-disable-next-line camelcase
+          const { body } = await githubApiClient.get<{ key: string; key_id: string }>(
+            `/repos/${repo}/actions/secrets/public-key`,
+            {
+              headers: { Authorization: `token ${ghAccessToken}`, "User-Agent": "Firebase CLI" },
+              queryParams: { type: "owner" },
+            }
+          );
+          key = body.key;
+          keyId = body.key_id;
+        } catch (e: any) {
+          if (e.status === 403) {
+            logger.info();
+            logger.info();
+            logWarning(
+              "The provided authorization cannot be used with this repository. If this repository is in an organization, did you remember to grant access?",
+              "error"
+            );
+            logger.info();
+            logLabeledBullet(
+              "Action required",
+              `Visit this URL to ensure access has been granted to the appropriate organization(s) for the Firebase CLI GitHub OAuth App:`
+            );
+            logger.info(
+              bold.underline(
+                `https://github.com/settings/connections/applications/${githubClientId}`
+              )
+            );
+            logger.info();
           }
-        );
-        key = body.key;
-        keyId = body.key_id;
+          return false;
+        }
         return true;
       },
     },
@@ -510,14 +539,14 @@ async function createServiceAccountAndKeyWithRetry(
   repo: string,
   accountId: string
 ): Promise<string> {
-  const spinnerServiceAccount = ora.default("Retrieving a service account.");
+  const spinnerServiceAccount = ora("Retrieving a service account.");
   spinnerServiceAccount.start();
 
   try {
     const serviceAccountJSON = await createServiceAccountAndKey(options, repo, accountId);
     spinnerServiceAccount.stop();
     return serviceAccountJSON;
-  } catch (e) {
+  } catch (e: any) {
     spinnerServiceAccount.stop();
     if (!e.message.includes("429")) {
       throw e;
@@ -547,7 +576,7 @@ async function createServiceAccountAndKey(
       `A service account with permission to deploy to Firebase Hosting for the GitHub repository ${repo}`,
       `GitHub Actions (${repo})`
     );
-  } catch (e) {
+  } catch (e: any) {
     // No need to throw if there is an existing service account
     if (!e.message.includes("409")) {
       throw e;

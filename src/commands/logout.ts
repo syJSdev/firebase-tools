@@ -9,7 +9,8 @@ import { promptOnce } from "../prompt";
 module.exports = new Command("logout [email]")
   .description("log the CLI out of Firebase")
   .action(async (email: string | undefined, options: any) => {
-    const globalToken = utils.getInheritedOption(options, "token") as string | undefined;
+    const globalToken = utils.getInheritedOption(options, "token");
+    utils.assertIsStringOrUndefined(globalToken);
 
     const allAccounts = auth.getAllAccounts();
     if (allAccounts.length === 0 && !globalToken) {
@@ -60,7 +61,7 @@ module.exports = new Command("logout [email]")
         auth.setRefreshToken(token);
         try {
           await auth.logout(token);
-        } catch (e) {
+        } catch (e: any) {
           utils.logWarning(
             `Invalid refresh token for ${account.user.email}, did not need to deauthorize`
           );
@@ -74,7 +75,7 @@ module.exports = new Command("logout [email]")
       auth.setRefreshToken(globalToken);
       try {
         await auth.logout(globalToken);
-      } catch (e) {
+      } catch (e: any) {
         utils.logWarning("Invalid refresh token, did not need to deauthorize");
       }
 

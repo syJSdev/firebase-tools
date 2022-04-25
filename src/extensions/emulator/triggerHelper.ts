@@ -1,29 +1,33 @@
-import * as _ from "lodash";
-import { ParsedTriggerDefinition } from "../../emulator/functionsEmulatorShared";
-import { Constants } from "../../emulator/constants";
+import {
+  ParsedTriggerDefinition,
+  getServiceFromEventType,
+} from "../../emulator/functionsEmulatorShared";
 import { EmulatorLogger } from "../../emulator/emulatorLogger";
 import { Emulators } from "../../emulator/types";
+import * as extensionsApi from "../../extensions/extensionsApi";
+import * as proto from "../../gcp/proto";
 
-export function functionResourceToEmulatedTriggerDefintion(resource: any): ParsedTriggerDefinition {
+export function functionResourceToEmulatedTriggerDefintion(
+  resource: extensionsApi.Resource
+): ParsedTriggerDefinition {
   const etd: ParsedTriggerDefinition = {
     name: resource.name,
     entryPoint: resource.name,
+    platform: "gcfv1",
   };
-  const properties = _.get(resource, "properties", {});
-  if (properties.timeout) {
-    etd.timeout = properties.timeout;
-  }
-  if (properties.location) {
-    etd.regions = [properties.location];
-  }
-  if (properties.availableMemoryMb) {
-    etd.availableMemoryMb = properties.availableMemoryMb;
-  }
+  const properties = resource.properties || {};
+  proto.renameIfPresent(etd, properties, "timeoutSeconds", "timeout", proto.secondsFromDuration);
+  proto.renameIfPresent(etd, properties, "regions", "location", (str: string) => [str]);
+  proto.copyIfPresent(etd, properties, "availableMemoryMb");
   if (properties.httpsTrigger) {
     etd.httpsTrigger = properties.httpsTrigger;
-  } else if (properties.eventTrigger) {
-    properties.eventTrigger.service = getServiceFromEventType(properties.eventTrigger.eventType);
-    etd.eventTrigger = properties.eventTrigger;
+  }
+  if (properties.eventTrigger) {
+    etd.eventTrigger = {
+      eventType: properties.eventTrigger.eventType,
+      resource: properties.eventTrigger.resource,
+      service: getServiceFromEventType(properties.eventTrigger.eventType),
+    };
   } else {
     EmulatorLogger.forEmulator(Emulators.FUNCTIONS).log(
       "WARN",
@@ -31,37 +35,4 @@ export function functionResourceToEmulatedTriggerDefintion(resource: any): Parse
     );
   }
   return etd;
-}
-
-function getServiceFromEventType(eventType: string): string {
-  if (eventType.includes("firestore")) {
-    return Constants.SERVICE_FIRESTORE;
-  }
-  if (eventType.includes("database")) {
-    return Constants.SERVICE_REALTIME_DATABASE;
-  }
-  if (eventType.includes("pubsub")) {
-    return Constants.SERVICE_PUBSUB;
-  }
-  if (eventType.includes("storage")) {
-    return Constants.SERVICE_STORAGE;
-  }
-  // Below this point are services that do not have a emulator.
-  if (eventType.includes("analytics")) {
-    return Constants.SERVICE_ANALYTICS;
-  }
-  if (eventType.includes("auth")) {
-    return Constants.SERVICE_AUTH;
-  }
-  if (eventType.includes("crashlytics")) {
-    return Constants.SERVICE_CRASHLYTICS;
-  }
-  if (eventType.includes("remoteconfig")) {
-    return Constants.SERVICE_REMOTE_CONFIG;
-  }
-  if (eventType.includes("testing")) {
-    return Constants.SERVICE_TEST_LAB;
-  }
-
-  return "";
 }

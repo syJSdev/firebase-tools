@@ -53,6 +53,7 @@ repository:
 ```bash
 git clone git@github.com:firebase/firebase-tools.git
 cd firebase-tools
+npm install # must be run the first time you clone
 npm link  # installs dependencies, runs a build, links it into the environment
 ```
 
@@ -311,7 +312,7 @@ import { FirebaseError } from "../error";
 async function myFunc(options: any): void {
   try {
     return await somethingThatMayFail(options.projectId);
-  } catch (err) {
+  } catch (err: any) {
     throw FirebaseError(`Project ${clc.bold(projectId)} caused an issue.', { original: err });
   }
 }

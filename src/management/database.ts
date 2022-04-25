@@ -29,6 +29,7 @@ export enum DatabaseInstanceState {
 export enum DatabaseLocation {
   US_CENTRAL1 = "us-central1",
   EUROPE_WEST1 = "europe-west1",
+  ASIA_SOUTHEAST1 = "asia-southeast1",
   ANY = "-",
 }
 
@@ -72,7 +73,7 @@ export async function getDatabaseInstanceDetails(
     );
 
     return convertDatabaseInstance(response.body);
-  } catch (err) {
+  } catch (err: any) {
     logger.debug(err.message);
     const emulatorHost = process.env[Constants.FIREBASE_DATABASE_EMULATOR_HOST];
     if (emulatorHost) {
@@ -125,7 +126,7 @@ export async function createInstance(
     );
 
     return convertDatabaseInstance(response.body);
-  } catch (err) {
+  } catch (err: any) {
     logger.debug(err.message);
     return utils.reject(
       `Failed to create instance: ${instanceName}. See firebase-debug.log for more details.`,
@@ -170,7 +171,7 @@ export async function checkInstanceNameAvailable(
     return {
       available: true,
     };
-  } catch (err) {
+  } catch (err: any) {
     logger.debug(
       `Invalid Realtime Database instance name: ${instanceName}.${
         err.message ? " " + err.message : ""
@@ -206,15 +207,17 @@ export function parseDatabaseLocation(
     return defaultLocation;
   }
   switch (location.toLowerCase()) {
-    case "europe-west1":
-      return DatabaseLocation.EUROPE_WEST1;
     case "us-central1":
       return DatabaseLocation.US_CENTRAL1;
+    case "europe-west1":
+      return DatabaseLocation.EUROPE_WEST1;
+    case "asia-southeast1":
+      return DatabaseLocation.ASIA_SOUTHEAST1;
     case "":
       return defaultLocation;
     default:
       throw new FirebaseError(
-        `Unexpected location value: ${location}. Only us-central1, and europe-west1 locations are supported`
+        `Unexpected location value: ${location}. Only us-central1, europe-west1, and asia-southeast1 locations are supported`
       );
   }
 }
@@ -253,7 +256,7 @@ export async function listDatabaseInstances(
     } while (nextPageToken);
 
     return instances;
-  } catch (err) {
+  } catch (err: any) {
     logger.debug(err.message);
     throw new FirebaseError(
       `Failed to list Firebase Realtime Database instances${
@@ -273,7 +276,7 @@ function convertDatabaseInstance(serverInstance: any): DatabaseInstance {
     throw new FirebaseError(`DatabaseInstance response is missing field "name"`);
   }
   const m = serverInstance.name.match(INSTANCE_RESOURCE_NAME_REGEX);
-  if (!m || m.length != 4) {
+  if (!m || m.length !== 4) {
     throw new FirebaseError(
       `Error parsing instance resource name: ${serverInstance.name}, matches: ${m}`
     );
